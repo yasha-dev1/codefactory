@@ -125,7 +125,7 @@ export async function runCommand(options: RunOptions): Promise<void> {
       '#!/bin/bash',
       `PROMPT=$(<"${promptFile}")`,
       `TASK=$(<"${taskFile}")`,
-      'exec claude --append-system-prompt "$PROMPT" "$TASK"',
+      'exec claude --dangerously-skip-permissions --append-system-prompt "$PROMPT" "$TASK"',
       '',
     ].join('\n'),
     'utf-8',
