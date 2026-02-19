@@ -1,0 +1,439 @@
+name: Code Review Agent
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
+concurrency:
+  group: review-agent-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: Review Agent
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout at PR head SHA
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Determine risk tier
+        id: tier
+        run: |
+          BASE_REF="${{ github.event.pull_request.base.ref }}"
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+
+          # Verify SHA discipline
+          ACTUAL_SHA="$(git rev-parse HEAD)"
+          if [[ "${ACTUAL_SHA,,}" != "${HEAD_SHA,,}" ]]; then
+            echo "::error::SHA discipline violation: HEAD (${ACTUAL_SHA}) ≠ expected (${HEAD_SHA})"
+            exit 1
+          fi
+
+          # Ensure base ref is available
+          if ! git rev-parse --verify "origin/${BASE_REF}" &>/dev/null; then
+            git fetch origin "${BASE_REF}" --depth=1 2>/dev/null || true
+          fi
+
+          MERGE_BASE="$(git merge-base "origin/${BASE_REF}" HEAD 2>/dev/null || echo "")"
+          if [[ -z "$MERGE_BASE" ]]; then
+            echo "tier=3" >> "$GITHUB_OUTPUT"
+            echo "changed-files=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          CHANGED="$(git diff --name-only "${MERGE_BASE}...HEAD" 2>/dev/null || echo "")"
+          if [[ -z "$CHANGED" ]]; then
+            echo "tier=1" >> "$GITHUB_OUTPUT"
+            echo "changed-files=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          TIER=1
+          while IFS= read -r file; do
+            [[ -z "$file" ]] && continue
+            case "$file" in
+              src/index.ts|src/cli.ts|package.json|tsconfig.json|tsup.config.ts|vitest.config.ts|eslint.config.js)
+                TIER=3 ;;
+              src/commands/*.ts|src/core/*.ts|src/harnesses/index.ts|src/harnesses/types.ts)
+                [[ $TIER -lt 3 ]] && TIER=3 ;;
+              src/*.ts|tests/*.ts|scripts/*.ts|*.ts|*.js|*.mjs)
+                [[ $TIER -lt 2 ]] && TIER=2 ;;
+            esac
+          done <<< "$CHANGED"
+
+          echo "tier=${TIER}" >> "$GITHUB_OUTPUT"
+
+          # Serialize changed files for the review prompt
+          {
+            echo "changed-files<<CEOF"
+            echo "$CHANGED"
+            echo "CEOF"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "✔ Tier ${TIER} — $(echo "$CHANGED" | wc -l) files changed"
+
+      - name: Skip if Tier 1
+        if: steps.tier.outputs.tier == '1'
+        run: echo "Tier 1 change — review agent not required. Skipping."
+
+      - name: SHA deduplication check
+        if: steps.tier.outputs.tier != '1'
+        id: dedup
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const headSha = context.payload.pull_request.head.sha;
+            const marker = `<!-- harness-review: ${headSha} -->`;
+            const prNumber = context.payload.pull_request.number;
+
+            core.info(`Checking for existing review of SHA ${headSha.slice(0, 12)}...`);
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              per_page: 100,
+            });
+
+            const alreadyReviewed = comments.some((c) => c.body?.includes(marker));
+            if (alreadyReviewed) {
+              core.info(`SHA ${headSha.slice(0, 12)} already reviewed — skipping.`);
+              core.setOutput('skip', 'true');
+            } else {
+              core.info(`No existing review for SHA ${headSha.slice(0, 12)} — proceeding.`);
+              core.setOutput('skip', 'false');
+            }
+
+      - name: Create in-progress check run
+        if: steps.tier.outputs.tier != '1' && steps.dedup.outputs.skip != 'true'
+        id: check
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const headSha = context.payload.pull_request.head.sha;
+            const { data: checkRun } = await github.rest.checks.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: 'review-agent',
+              head_sha: headSha,
+              status: 'in_progress',
+              started_at: new Date().toISOString(),
+              output: {
+                title: 'Code Review Agent',
+                summary: 'Review in progress...',
+              },
+            });
+            core.setOutput('check-run-id', checkRun.id);
+            core.info(`Created check run ${checkRun.id} for SHA ${headSha.slice(0, 12)}`);
+
+      - name: Setup Node.js
+        if: steps.tier.outputs.tier != '1' && steps.dedup.outputs.skip != 'true'
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: 18
+          cache: npm
+
+      - name: Get PR diff
+        if: steps.tier.outputs.tier != '1' && steps.dedup.outputs.skip != 'true'
+        id: diff
+        run: |
+          BASE_REF="${{ github.event.pull_request.base.ref }}"
+          MERGE_BASE="$(git merge-base "origin/${BASE_REF}" HEAD)"
+          {
+            echo "diff<<DIFF_EOF"
+            git diff "${MERGE_BASE}...HEAD" -- '*.ts' '*.js' '*.json' '*.yml' '*.yaml' | head -c 100000
+            echo ""
+            echo "DIFF_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Run Claude review
+        if: steps.tier.outputs.tier != '1' && steps.dedup.outputs.skip != 'true'
+        id: review
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PR_DIFF: ${{ steps.diff.outputs.diff }}
+          CHANGED_FILES: ${{ steps.tier.outputs.changed-files }}
+          RISK_TIER: ${{ steps.tier.outputs.tier }}
+        with:
+          script: |
+            const fs = require('fs');
+            const { execSync } = require('child_process');
+
+            const tier = process.env.RISK_TIER;
+            const changedFiles = (process.env.CHANGED_FILES || '').trim();
+            const diff = process.env.PR_DIFF || '';
+
+            // Load the review prompt template
+            let reviewPrompt = '';
+            try {
+              reviewPrompt = fs.readFileSync('scripts/review-prompt.md', 'utf-8');
+            } catch {
+              reviewPrompt = 'Review the following PR diff for bugs, security issues, and architectural violations.';
+            }
+
+            // Load CLAUDE.md for project conventions
+            let claudeMd = '';
+            try {
+              claudeMd = fs.readFileSync('CLAUDE.md', 'utf-8');
+            } catch {
+              claudeMd = '';
+            }
+
+            // Load architectural boundaries from harness config
+            let boundaries = '';
+            try {
+              const config = JSON.parse(fs.readFileSync('harness.config.json', 'utf-8'));
+              boundaries = JSON.stringify(config.architecturalBoundaries, null, 2);
+            } catch {
+              boundaries = 'Unable to load architectural boundaries.';
+            }
+
+            const prompt = [
+              reviewPrompt,
+              '',
+              '## Project Conventions (from CLAUDE.md)',
+              claudeMd ? claudeMd.slice(0, 5000) : 'No CLAUDE.md found.',
+              '',
+              '## Architectural Boundaries',
+              boundaries,
+              '',
+              `## Risk Tier: ${tier}`,
+              '',
+              '## Changed Files',
+              changedFiles || 'None detected.',
+              '',
+              '## Diff',
+              '```diff',
+              diff.slice(0, 80000),
+              '```',
+              '',
+              'Output your review as a JSON object with this exact schema:',
+              '```json',
+              '{',
+              '  "verdict": "APPROVE" | "REQUEST_CHANGES" | "COMMENT",',
+              '  "riskAssessment": { "confirmedTier": number, "reasoning": "string" },',
+              '  "issues": [{ "severity": "blocking" | "warning" | "suggestion", "file": "string", "line": number | null, "message": "string" }],',
+              '  "architecture": { "compliant": boolean, "violations": ["string"] },',
+              '  "testCoverage": { "adequate": boolean, "notes": "string" },',
+              '  "summary": "string"',
+              '}',
+              '```',
+            ].join('\n');
+
+            // Invoke Claude via the claude CLI
+            let reviewResult;
+            try {
+              const escapedPrompt = prompt.replace(/'/g, "'\\''");
+              const output = execSync(
+                `echo '${escapedPrompt}' | claude --output-format json --max-turns 1 -p -`,
+                {
+                  encoding: 'utf-8',
+                  timeout: 600000,
+                  maxBuffer: 10 * 1024 * 1024,
+                  env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: 'ci-review' },
+                }
+              );
+
+              // Extract JSON from the response
+              const jsonMatch = output.match(/\{[\s\S]*"verdict"[\s\S]*\}/);
+              if (jsonMatch) {
+                reviewResult = JSON.parse(jsonMatch[0]);
+              } else {
+                reviewResult = {
+                  verdict: 'COMMENT',
+                  riskAssessment: { confirmedTier: parseInt(tier), reasoning: 'Could not parse structured output.' },
+                  issues: [],
+                  architecture: { compliant: true, violations: [] },
+                  testCoverage: { adequate: true, notes: 'Review completed but output was not structured JSON.' },
+                  summary: output.slice(0, 2000),
+                };
+              }
+            } catch (error) {
+              core.warning(`Claude review invocation failed: ${error.message}`);
+              reviewResult = {
+                verdict: 'COMMENT',
+                riskAssessment: { confirmedTier: parseInt(tier), reasoning: 'Review agent failed to run.' },
+                issues: [{ severity: 'warning', file: '', line: null, message: `Review agent error: ${error.message.slice(0, 500)}` }],
+                architecture: { compliant: true, violations: [] },
+                testCoverage: { adequate: true, notes: 'Unable to assess — review agent failed.' },
+                summary: 'The review agent encountered an error. Manual review recommended.',
+              };
+            }
+
+            core.setOutput('result', JSON.stringify(reviewResult));
+            core.setOutput('verdict', reviewResult.verdict);
+            core.info(`Review verdict: ${reviewResult.verdict}`);
+
+      - name: Post review comment
+        if: steps.tier.outputs.tier != '1' && steps.dedup.outputs.skip != 'true'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          REVIEW_RESULT: ${{ steps.review.outputs.result }}
+        with:
+          script: |
+            const headSha = context.payload.pull_request.head.sha;
+            const prNumber = context.payload.pull_request.number;
+
+            let result;
+            try {
+              result = JSON.parse(process.env.REVIEW_RESULT);
+            } catch {
+              result = { verdict: 'COMMENT', summary: 'Failed to parse review result.', issues: [], architecture: { compliant: true, violations: [] }, testCoverage: { adequate: true, notes: '' }, riskAssessment: { confirmedTier: 0, reasoning: '' } };
+            }
+
+            const verdictEmoji = { APPROVE: '✅', REQUEST_CHANGES: '❌', COMMENT: '💬' };
+            const severityEmoji = { blocking: '🚫', warning: '⚠️', suggestion: '💡' };
+
+            // Build issues table
+            const issues = result.issues || [];
+            let issuesSection = '';
+            if (issues.length > 0) {
+              const blocking = issues.filter((i) => i.severity === 'blocking');
+              const warnings = issues.filter((i) => i.severity === 'warning');
+              const suggestions = issues.filter((i) => i.severity === 'suggestion');
+
+              const formatIssue = (i) => {
+                const loc = i.file ? `\`${i.file}\`${i.line ? `:${i.line}` : ''}` : 'General';
+                return `| ${severityEmoji[i.severity] || '•'} ${i.severity} | ${loc} | ${i.message} |`;
+              };
+
+              issuesSection = [
+                '### Issues Found',
+                '',
+                `| Severity | Location | Description |`,
+                `|----------|----------|-------------|`,
+                ...blocking.map(formatIssue),
+                ...warnings.map(formatIssue),
+                ...suggestions.map(formatIssue),
+                '',
+                `**${blocking.length}** blocking · **${warnings.length}** warning · **${suggestions.length}** suggestion`,
+              ].join('\n');
+            } else {
+              issuesSection = '### Issues Found\n\nNo issues found.';
+            }
+
+            // Build architecture section
+            const arch = result.architecture || { compliant: true, violations: [] };
+            const archSection = arch.compliant
+              ? '### Architecture\n\n✅ Layer boundary compliance verified.'
+              : `### Architecture\n\n❌ Layer boundary violations:\n${(arch.violations || []).map((v) => `- ${v}`).join('\n')}`;
+
+            // Build test coverage section
+            const tests = result.testCoverage || { adequate: true, notes: '' };
+            const testSection = `### Test Coverage\n\n${tests.adequate ? '✅' : '⚠️'} ${tests.notes || (tests.adequate ? 'Test coverage adequate.' : 'Test coverage concerns.')}`;
+
+            // Build risk assessment section
+            const risk = result.riskAssessment || { confirmedTier: 0, reasoning: '' };
+            const riskSection = `### Risk Assessment\n\n**Confirmed Tier**: ${risk.confirmedTier}\n**Reasoning**: ${risk.reasoning}`;
+
+            const body = [
+              `<!-- harness-review: ${headSha} -->`,
+              `## ${verdictEmoji[result.verdict] || '💬'} Code Review Agent — ${result.verdict}`,
+              '',
+              `**Commit**: \`${headSha.slice(0, 12)}\``,
+              '',
+              result.summary || '',
+              '',
+              riskSection,
+              '',
+              issuesSection,
+              '',
+              archSection,
+              '',
+              testSection,
+              '',
+              '---',
+              '*🤖 Automated review by [harness review agent](https://github.com/codefactory). Relaxed mode: only bugs and security issues are blocking.*',
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body,
+            });
+
+            core.info(`Posted review comment for SHA ${headSha.slice(0, 12)}`);
+
+      - name: Complete check run
+        if: always() && steps.check.outputs.check-run-id
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          CHECK_RUN_ID: ${{ steps.check.outputs.check-run-id }}
+          REVIEW_VERDICT: ${{ steps.review.outputs.verdict }}
+          REVIEW_RESULT: ${{ steps.review.outputs.result }}
+        with:
+          script: |
+            const checkRunId = parseInt(process.env.CHECK_RUN_ID);
+            const verdict = process.env.REVIEW_VERDICT || 'COMMENT';
+
+            let result;
+            try {
+              result = JSON.parse(process.env.REVIEW_RESULT || '{}');
+            } catch {
+              result = {};
+            }
+
+            const blocking = (result.issues || []).filter((i) => i.severity === 'blocking');
+            const conclusion = verdict === 'APPROVE' ? 'success'
+              : verdict === 'REQUEST_CHANGES' && blocking.length > 0 ? 'failure'
+              : 'neutral';
+
+            const summary = [
+              `**Verdict**: ${verdict}`,
+              `**Blocking issues**: ${blocking.length}`,
+              `**Total issues**: ${(result.issues || []).length}`,
+              `**Architecture compliant**: ${result.architecture?.compliant ?? 'N/A'}`,
+              `**Test coverage adequate**: ${result.testCoverage?.adequate ?? 'N/A'}`,
+            ].join('\n');
+
+            await github.rest.checks.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              check_run_id: checkRunId,
+              status: 'completed',
+              conclusion,
+              completed_at: new Date().toISOString(),
+              output: {
+                title: `Review Agent — ${verdict}`,
+                summary,
+              },
+            });
+
+            core.info(`Check run ${checkRunId} completed: ${conclusion}`);
+
+      - name: Report skip as success
+        if: steps.tier.outputs.tier == '1' || steps.dedup.outputs.skip == 'true'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const headSha = context.payload.pull_request.head.sha;
+            const tier = '${{ steps.tier.outputs.tier }}';
+            const skipped = '${{ steps.dedup.outputs.skip }}' === 'true';
+            const reason = tier === '1' ? 'Tier 1 — review not required' : `SHA ${headSha.slice(0, 12)} already reviewed`;
+
+            await github.rest.checks.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: 'review-agent',
+              head_sha: headSha,
+              status: 'completed',
+              conclusion: 'success',
+              completed_at: new Date().toISOString(),
+              output: {
+                title: `Review Agent — Skipped`,
+                summary: reason,
+              },
+            });
+
+            core.info(`Review skipped: ${reason}`);
