@@ -9,7 +9,7 @@ import { confirmPrompt, inputPrompt } from '../ui/prompts.js';
 import { isGitRepo, getRepoRoot, hasUncommittedChanges } from '../utils/git.js';
 import { readFileIfExists } from '../utils/fs.js';
 import { NotAGitRepoError, ClaudeNotFoundError } from '../utils/errors.js';
-import { slugifyTask, createWorktree } from '../core/worktree.js';
+import { generateBranchName, createWorktree } from '../core/worktree.js';
 import { openInNewTerminal } from '../core/terminal.js';
 import { buildAgentSystemPrompt } from '../prompts/agent-system.js';
 
@@ -86,8 +86,8 @@ export async function runCommand(options: RunOptions): Promise<void> {
     return;
   }
 
-  // ── Phase 3: Worktree Setup ─────────────────────────────────────────
-  const branchName = slugifyTask(task);
+  // ── Phase 3: Branch Name Generation ────────────────────────────────
+  const branchName = await withSpinner('Generating branch name...', () => generateBranchName(task));
   logger.info(`Branch: ${branchName}`);
 
   const proceed = await confirmPrompt('Create worktree and start Claude?', true);

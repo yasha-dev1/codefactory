@@ -1,4 +1,4 @@
-import { exec } from 'node:child_process';
+import { exec, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { basename, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -34,13 +34,69 @@ export function slugifyTask(description: string): string {
 }
 
 /**
+ * Use Claude to generate a meaningful branch name from a task description.
+ * Falls back to slugifyTask if Claude is unavailable or returns an invalid name.
+ */
+export async function generateBranchName(taskDescription: string): Promise<string> {
+  const hash = createHash('sha256')
+    .update(taskDescription + Date.now().toString())
+    .digest('hex')
+    .slice(0, 6);
+
+  try {
+    const prompt = [
+      'Generate a git branch name for this task.',
+      'Rules:',
+      '- Format: cf/<type>/<kebab-case-description>',
+      '- type must be one of: feat, fix, refactor, chore, docs, test',
+      '- description should be 2-5 words in kebab-case, lowercase, alphanumeric and hyphens only',
+      '- Only output the branch name, nothing else. No backticks, no explanation.',
+      '',
+      `Task: ${taskDescription}`,
+    ].join('\n');
+
+    const result = await new Promise<string>((resolve, reject) => {
+      const child = spawn('claude', ['--print', prompt], {
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+
+      let stdout = '';
+      child.stdout.on('data', (chunk: Buffer) => {
+        stdout += chunk.toString();
+      });
+
+      child.on('close', (code) => {
+        if (code === 0) resolve(stdout.trim());
+        else reject(new Error(`Claude exited with code ${code}`));
+      });
+
+      child.on('error', reject);
+
+      setTimeout(() => {
+        child.kill();
+        reject(new Error('Timed out waiting for Claude'));
+      }, 30_000);
+    });
+
+    // Extract the branch name pattern from Claude's response
+    const match = result.match(
+      /cf\/(?:feat|fix|refactor|chore|docs|test)\/[a-z0-9]+(?:-[a-z0-9]+)*/,
+    );
+    if (match && match[0].length <= 80) {
+      return `${match[0]}-${hash}`;
+    }
+  } catch {
+    // Fallback to slugifyTask
+  }
+
+  return slugifyTask(taskDescription);
+}
+
+/**
  * Create a git worktree on a new branch.
  * Worktree path: ../<repoName>-worktrees/<branchName>/
  */
-export async function createWorktree(
-  repoRoot: string,
-  branchName: string,
-): Promise<WorktreeInfo> {
+export async function createWorktree(repoRoot: string, branchName: string): Promise<WorktreeInfo> {
   const repoName = basename(repoRoot);
   const worktreeBase = resolve(repoRoot, '..', `${repoName}-worktrees`);
   const worktreePath = join(worktreeBase, branchName);
