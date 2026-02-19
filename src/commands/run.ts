@@ -1,4 +1,5 @@
 import { exec } from 'node:child_process';
+import { mkdir, writeFile, chmod } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -108,13 +109,30 @@ export async function runCommand(options: RunOptions): Promise<void> {
   });
 
   // ── Phase 5: Open Claude in New Terminal ────────────────────────────
-  // Escape the system prompt and task for shell safety
-  const escapedPrompt = systemPrompt.replace(/'/g, "'\\''");
-  const escapedTask = task.replace(/'/g, "'\\''");
+  // Write prompt and task to files to avoid shell escaping issues with
+  // multi-line content containing backticks, quotes, and special chars.
+  const cfDir = join(worktree.path, '.codefactory');
+  await mkdir(cfDir, { recursive: true });
+  const promptFile = join(cfDir, 'system-prompt');
+  const taskFile = join(cfDir, 'task');
+  const launcherFile = join(cfDir, 'launch.sh');
 
-  const claudeCommand = `claude --append-system-prompt '${escapedPrompt}' '${escapedTask}'`;
+  await writeFile(promptFile, systemPrompt, 'utf-8');
+  await writeFile(taskFile, task, 'utf-8');
+  await writeFile(
+    launcherFile,
+    [
+      '#!/bin/bash',
+      `PROMPT=$(<"${promptFile}")`,
+      `TASK=$(<"${taskFile}")`,
+      'exec claude --append-system-prompt "$PROMPT" "$TASK"',
+      '',
+    ].join('\n'),
+    'utf-8',
+  );
+  await chmod(launcherFile, 0o755);
 
-  await openInNewTerminal(claudeCommand, worktree.path);
+  await openInNewTerminal(`bash "${launcherFile}"`, worktree.path);
 
   // ── Phase 6: Post-Launch Summary ────────────────────────────────────
   console.log();
