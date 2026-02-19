@@ -7,7 +7,12 @@ const pkg = require('../package.json') as { version: string; description: string
 export const program = new Command()
   .name('codefactory')
   .description(pkg.description)
-  .version(pkg.version);
+  .version(pkg.version)
+  .argument('[task]', 'Task description (skips interactive prompt if provided)')
+  .action(async (task?: string) => {
+    const { runCommand } = await import('./commands/run.js');
+    await runCommand({ task });
+  });
 
 program
   .command('init')

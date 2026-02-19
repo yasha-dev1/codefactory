@@ -25,3 +25,18 @@ export async function getRepoRoot(dir?: string): Promise<string> {
   const { stdout } = await execAsync('git rev-parse --show-toplevel', { cwd: dir });
   return stdout.trim();
 }
+
+export async function getCurrentBranch(dir?: string): Promise<string> {
+  const { stdout } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: dir });
+  return stdout.trim();
+}
+
+export async function getHeadSha(dir?: string): Promise<string> {
+  const { stdout } = await execAsync('git rev-parse HEAD', { cwd: dir });
+  return stdout.trim();
+}
+
+export async function hasUncommittedChanges(dir?: string): Promise<boolean> {
+  const { stdout } = await execAsync('git status --porcelain', { cwd: dir });
+  return stdout.trim().length > 0;
+}

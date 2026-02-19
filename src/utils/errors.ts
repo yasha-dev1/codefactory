@@ -18,3 +18,10 @@ export class NotAGitRepoError extends Error {
     this.name = 'NotAGitRepoError';
   }
 }
+
+export class WorktreeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'WorktreeError';
+  }
+}
