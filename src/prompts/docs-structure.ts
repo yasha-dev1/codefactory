@@ -5,7 +5,7 @@ import type { DetectionResult, UserPreferences } from './types.js';
  */
 export function buildDocsStructurePrompt(
   detection: DetectionResult,
-  prefs: UserPreferences,
+  _prefs: UserPreferences,
 ): string {
   const layers = detection.architecturalLayers;
   const hasLayers = layers.length > 0;
@@ -52,15 +52,18 @@ graph TD
   B --> C[Component C]
 \`\`\`
 
-${hasLayers ? `#### Layer Structure
+${
+  hasLayers
+    ? `#### Layer Structure
 Based on detected layers (${layers.join(', ')}):
-${layers.map(l => `- **${l}**: Describe this layer's responsibility, what it contains, and its allowed dependencies`).join('\n')}
+${layers.map((l) => `- **${l}**: Describe this layer's responsibility, what it contains, and its allowed dependencies`).join('\n')}
 
-Include an ASCII or Mermaid dependency diagram showing allowed import directions.` :
-`#### Directory Organization
+Include an ASCII or Mermaid dependency diagram showing allowed import directions.`
+    : `#### Directory Organization
 - Analyze the source directory structure to identify implicit layer boundaries
 - Document the observed organization pattern
-- Suggest formal layer boundaries if the structure supports it`}
+- Suggest formal layer boundaries if the structure supports it`
+}
 
 #### Data Flow
 - Describe how a typical request flows through the system from entry to response
@@ -93,13 +96,15 @@ A coding conventions document that codifies the project's standards. Read actual
 - Barrel export usage (index.ts files)
 - Module boundary rules
 - For ${detection.primaryLanguage} specifically:
-${detection.primaryLanguage === 'typescript' || detection.primaryLanguage === 'javascript' ?
-  '  - ESM vs CJS convention\n  - Path alias usage (@/ or ~/)\n  - Type-only import syntax' :
-detection.primaryLanguage === 'python' ?
-  '  - Absolute vs relative imports\n  - __init__.py conventions\n  - Type stub usage' :
-detection.primaryLanguage === 'go' ?
-  '  - Package naming conventions\n  - Internal package usage\n  - Interface placement' :
-  '  - Language-specific module and import conventions'}
+${
+  detection.primaryLanguage === 'typescript' || detection.primaryLanguage === 'javascript'
+    ? '  - ESM vs CJS convention\n  - Path alias usage (@/ or ~/)\n  - Type-only import syntax'
+    : detection.primaryLanguage === 'python'
+      ? '  - Absolute vs relative imports\n  - __init__.py conventions\n  - Type stub usage'
+      : detection.primaryLanguage === 'go'
+        ? '  - Package naming conventions\n  - Internal package usage\n  - Interface placement'
+        : '  - Language-specific module and import conventions'
+}
 
 #### Error Handling
 - How errors are propagated (exceptions, Result types, error codes)
@@ -127,7 +132,9 @@ detection.primaryLanguage === 'go' ?
 
 ### 3. docs/layers.md
 
-${hasLayers ? `A focused document about architectural layer boundaries.
+${
+  hasLayers
+    ? `A focused document about architectural layer boundaries.
 
 #### Layer Definitions
 
@@ -142,7 +149,7 @@ For each layer (${layers.join(', ')}):
 
 | From \\\\ To | ${layers.join(' | ')} |
 |---|${layers.map(() => '---').join('|')}|
-${layers.map(from => `| **${from}** | ${layers.map(to => from === to ? '-' : '?').join(' | ')} |`).join('\n')}
+${layers.map((from) => `| **${from}** | ${layers.map((to) => (from === to ? '-' : '?')).join(' | ')} |`).join('\n')}
 
 Fill in each cell with Y (allowed) or N (forbidden) based on the architectural pattern.
 
@@ -153,13 +160,13 @@ Fill in each cell with Y (allowed) or N (forbidden) based on the architectural p
 
 #### Common Violations and Fixes
 - List the most common boundary violations
-- Provide refactoring examples showing how to move logic to the correct layer` :
-
-`Since no formal layers were detected, this document should:
+- Provide refactoring examples showing how to move logic to the correct layer`
+    : `Since no formal layers were detected, this document should:
 - Analyze the existing directory structure to identify implicit boundaries
 - Propose reasonable layer definitions based on observed organization
 - Define dependency direction rules for the proposed layers
-- Provide guidance on evolving toward a more structured layered architecture`}
+- Provide guidance on evolving toward a more structured layered architecture`
+}
 
 **Target length**: ~80-120 lines.
 

@@ -8,22 +8,97 @@
     "ciProvider": null,
     "monorepo": false
   },
+  "riskTiers": {
+    "tier1": {
+      "name": "low",
+      "patterns": ["docs/**", "*.md", "**/*.md"],
+      "requiredChecks": ["lint"],
+      "mergePolicy": "auto",
+      "evidenceRequirements": ["lint-clean"]
+    },
+    "tier2": {
+      "name": "medium",
+      "patterns": ["src/**", "tests/**"],
+      "requiredChecks": ["lint", "type-check", "test", "build"],
+      "mergePolicy": "review-agent",
+      "evidenceRequirements": ["tests-pass", "lint-clean", "type-check-clean"]
+    },
+    "tier3": {
+      "name": "high",
+      "patterns": [
+        "src/index.ts",
+        "src/cli.ts",
+        "src/commands/init.ts",
+        "src/core/claude-runner.ts",
+        "src/core/config.ts",
+        "src/core/detector.ts",
+        "src/core/file-writer.ts",
+        "src/harnesses/index.ts",
+        "src/harnesses/types.ts",
+        "package.json",
+        "tsconfig.json",
+        "tsup.config.ts",
+        "vitest.config.ts",
+        "eslint.config.js"
+      ],
+      "requiredChecks": [
+        "lint",
+        "type-check",
+        "test",
+        "build",
+        "structural-tests",
+        "harness-smoke",
+        "manual-approval"
+      ],
+      "mergePolicy": "review-agent + manual",
+      "evidenceRequirements": ["tests-pass", "lint-clean", "type-check-clean", "manual-review"]
+    }
+  },
+  "commands": {
+    "test": "npm test",
+    "build": "npm run build",
+    "lint": "npm run lint",
+    "typeCheck": "npm run typecheck"
+  },
+  "shaDiscipline": {
+    "enabled": true,
+    "description": "All CI gates pin to exact commit SHA from the risk policy gate"
+  },
+  "architecturalBoundaries": {
+    "utils": {
+      "allowedImports": []
+    },
+    "ui": {
+      "allowedImports": ["utils"]
+    },
+    "core": {
+      "allowedImports": ["utils"]
+    },
+    "commands": {
+      "allowedImports": ["core", "harnesses", "ui", "utils", "prompts"]
+    },
+    "prompts": {
+      "allowedImports": ["core", "utils"]
+    },
+    "providers": {
+      "allowedImports": ["core", "utils"]
+    },
+    "harnesses": {
+      "allowedImports": ["core", "prompts", "providers", "utils"]
+    }
+  },
   "harnesses": [
     {
       "name": "risk-contract",
       "enabled": true,
       "generatedAt": "2026-02-19T21:32:46.278Z",
-      "files": [
-        "/home/yasha/Desktop/projects/codefactory/harness.config.json"
-      ]
+      "files": ["/home/yasha/Desktop/projects/codefactory/harness.config.json"]
     },
     {
       "name": "claude-md",
       "enabled": true,
       "generatedAt": "2026-02-19T21:32:46.278Z",
-      "files": [
-        "/home/yasha/Desktop/projects/codefactory/CLAUDE.md"
-      ]
+      "files": ["/home/yasha/Desktop/projects/codefactory/CLAUDE.md"]
     },
     {
       "name": "docs-structure",

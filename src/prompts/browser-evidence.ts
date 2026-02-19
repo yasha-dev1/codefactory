@@ -2,7 +2,7 @@ import type { DetectionResult, UserPreferences } from './types.js';
 
 export function buildBrowserEvidencePrompt(
   detection: DetectionResult,
-  prefs: UserPreferences,
+  _prefs: UserPreferences,
 ): string {
   const framework = detection.framework ?? 'unknown';
 

@@ -1,4 +1,4 @@
-import { access, readFile, readdir, stat } from 'node:fs/promises';
+import { access, readFile, readdir } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 
 export async function fileExists(path: string): Promise<boolean> {
@@ -23,7 +23,9 @@ export async function getDirectoryTree(
   options?: { maxDepth?: number; ignore?: string[] },
 ): Promise<string> {
   const maxDepth = options?.maxDepth ?? 3;
-  const ignore = new Set(options?.ignore ?? ['node_modules', '.git', 'dist', '.next', '__pycache__']);
+  const ignore = new Set(
+    options?.ignore ?? ['node_modules', '.git', 'dist', '.next', '__pycache__'],
+  );
 
   const lines: string[] = [];
 

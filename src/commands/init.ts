@@ -4,30 +4,18 @@ import { promisify } from 'node:util';
 
 import { logger } from '../ui/logger.js';
 import { withSpinner } from '../ui/spinner.js';
-import {
-  confirmPrompt,
-  selectPrompt,
-  multiselectPrompt,
-  inputPrompt,
-} from '../ui/prompts.js';
+import { confirmPrompt, selectPrompt, multiselectPrompt, inputPrompt } from '../ui/prompts.js';
 import { isGitRepo, getRepoRoot } from '../utils/git.js';
-import { fileExists, readFileIfExists } from '../utils/fs.js';
+import { readFileIfExists } from '../utils/fs.js';
 import { NotAGitRepoError } from '../utils/errors.js';
 import { ClaudeRunner } from '../core/claude-runner.js';
 import { FileWriter } from '../core/file-writer.js';
 import { loadHarnessConfig, saveHarnessConfig } from '../core/config.js';
 import type { HarnessConfig } from '../core/config.js';
-import {
-  runHeuristicDetection,
-  runFullDetection,
-} from '../core/detector.js';
+import { runHeuristicDetection, runFullDetection } from '../core/detector.js';
 import type { DetectionResult, HeuristicResult } from '../core/detector.js';
 import { getHarnessModules } from '../harnesses/index.js';
-import type {
-  HarnessContext,
-  HarnessOutput,
-  UserPreferences,
-} from '../harnesses/types.js';
+import type { HarnessContext, HarnessOutput, UserPreferences } from '../harnesses/types.js';
 
 const execAsync = promisify(exec);
 
@@ -86,18 +74,16 @@ export async function initCommand(options: InitOptions): Promise<void> {
   }
 
   // ── 2. Detection phase ───────────────────────────────────────────────
-  const heuristics = await withSpinner(
-    'Running heuristic analysis...',
-    () => runHeuristicDetection(repoRoot),
+  const heuristics = await withSpinner('Running heuristic analysis...', () =>
+    runHeuristicDetection(repoRoot),
   );
 
   let detection: DetectionResult;
 
   if (!options.skipDetection) {
     const runner = new ClaudeRunner({ cwd: repoRoot });
-    detection = await withSpinner(
-      'Analyzing repository with Claude (deep detection)...',
-      () => runFullDetection(repoRoot, runner),
+    detection = await withSpinner('Analyzing repository with Claude (deep detection)...', () =>
+      runFullDetection(repoRoot, runner),
     );
   } else {
     detection = heuristicToDetectionResult(heuristics);
@@ -106,10 +92,7 @@ export async function initCommand(options: InitOptions): Promise<void> {
   // ── 3. User preferences ──────────────────────────────────────────────
   displayDetectionSummary(detection);
 
-  const detectionOk = await confirmPrompt(
-    'Does this detection look correct?',
-    true,
-  );
+  const detectionOk = await confirmPrompt('Does this detection look correct?', true);
   if (!detectionOk) {
     detection = await correctDetection(detection);
   }
@@ -163,15 +146,10 @@ export async function initCommand(options: InitOptions): Promise<void> {
     }
   }
 
-  const editPaths = await confirmPrompt(
-    'Would you like to add or modify critical paths?',
-    false,
-  );
+  const editPaths = await confirmPrompt('Would you like to add or modify critical paths?', false);
   let customCriticalPaths: string[] | undefined;
   if (editPaths) {
-    const pathInput = await inputPrompt(
-      'Enter additional critical paths (comma-separated):',
-    );
+    const pathInput = await inputPrompt('Enter additional critical paths (comma-separated):');
     const extra = pathInput
       .split(',')
       .map((p) => p.trim())
@@ -218,15 +196,12 @@ export async function initCommand(options: InitOptions): Promise<void> {
   console.log();
   logger.header('Generating harness artifacts');
 
-  const selectedModules = allHarnesses.filter((h) =>
-    selectedHarnesses.includes(h.name),
-  );
+  const selectedModules = allHarnesses.filter((h) => selectedHarnesses.includes(h.name));
 
   for (const harness of selectedModules) {
     try {
-      const output = await withSpinner(
-        `Generating ${harness.displayName}...`,
-        () => harness.execute(ctx),
+      const output = await withSpinner(`Generating ${harness.displayName}...`, () =>
+        harness.execute(ctx),
       );
 
       previousOutputs.set(harness.name, output);
@@ -264,9 +239,7 @@ export async function initCommand(options: InitOptions): Promise<void> {
         name: h.name,
         enabled: true,
         generatedAt: new Date().toISOString(),
-        files: output
-          ? [...output.filesCreated, ...output.filesModified]
-          : [],
+        files: output ? [...output.filesCreated, ...output.filesModified] : [],
       };
     }),
     generatedAt: new Date().toISOString(),
@@ -330,14 +303,10 @@ export async function initCommand(options: InitOptions): Promise<void> {
       const relativePaths = allFiles.map((f) => relative(repoRoot, f));
       const uniquePaths = [...new Set(relativePaths)];
 
-      await execAsync(
-        `git add ${uniquePaths.map((p) => `"${p}"`).join(' ')}`,
-        { cwd: repoRoot },
-      );
-      await execAsync(
-        `git commit -m "chore: initialize harness engineering with CodeFactory"`,
-        { cwd: repoRoot },
-      );
+      await execAsync(`git add ${uniquePaths.map((p) => `"${p}"`).join(' ')}`, { cwd: repoRoot });
+      await execAsync(`git commit -m "chore: initialize harness engineering with CodeFactory"`, {
+        cwd: repoRoot,
+      });
       logger.success('Created commit: chore: initialize harness engineering with CodeFactory');
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -349,18 +318,10 @@ export async function initCommand(options: InitOptions): Promise<void> {
   // Next steps
   console.log();
   logger.header('Next steps');
-  logger.info(
-    '1. Review the generated CLAUDE.md and harness.config.json files.',
-  );
-  logger.info(
-    '2. Run "npm run harness:smoke" to verify the harness setup works.',
-  );
-  logger.info(
-    '3. Open a PR with these changes and observe the CI harness checks.',
-  );
-  logger.info(
-    '4. Customize risk tiers and policies in harness.config.json as needed.',
-  );
+  logger.info('1. Review the generated CLAUDE.md and harness.config.json files.');
+  logger.info('2. Run "npm run harness:smoke" to verify the harness setup works.');
+  logger.info('3. Open a PR with these changes and observe the CI harness checks.');
+  logger.info('4. Customize risk tiers and policies in harness.config.json as needed.');
   console.log();
   logger.success('Harness engineering setup complete!');
 }
@@ -411,16 +372,10 @@ function displayDetectionSummary(d: DetectionResult): void {
 async function correctDetection(d: DetectionResult): Promise<DetectionResult> {
   const corrected = { ...d };
 
-  const language = await inputPrompt(
-    'Primary language:',
-    d.primaryLanguage,
-  );
+  const language = await inputPrompt('Primary language:', d.primaryLanguage);
   corrected.primaryLanguage = language;
 
-  const framework = await inputPrompt(
-    'Framework (leave empty for none):',
-    d.framework ?? '',
-  );
+  const framework = await inputPrompt('Framework (leave empty for none):', d.framework ?? '');
   corrected.framework = framework || null;
 
   const testFramework = await inputPrompt(
@@ -472,9 +427,7 @@ function displayDryRun(
   console.log();
 
   logger.info('Selected harnesses:');
-  const selectedModules = allHarnesses.filter((h) =>
-    prefs.selectedHarnesses.includes(h.name),
-  );
+  const selectedModules = allHarnesses.filter((h) => prefs.selectedHarnesses.includes(h.name));
   for (const h of selectedModules) {
     logger.dim(`  - ${h.displayName}`);
   }

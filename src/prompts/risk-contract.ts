@@ -3,16 +3,17 @@ import type { DetectionResult, UserPreferences } from './types.js';
 /**
  * Prompt for generating the harness.config.json risk contract.
  */
-export function buildRiskContractPrompt(detection: DetectionResult, prefs: UserPreferences): string {
-  const criticalPaths = [
-    ...detection.criticalPaths,
-    ...(prefs.customCriticalPaths ?? []),
-  ];
+export function buildRiskContractPrompt(
+  detection: DetectionResult,
+  prefs: UserPreferences,
+): string {
+  const criticalPaths = [...detection.criticalPaths, ...(prefs.customCriticalPaths ?? [])];
 
   const strictnessModifier = {
     relaxed: 'Use lenient thresholds. Allow self-merge for Tier 1. Require 1 reviewer for Tier 2.',
     standard: 'Use balanced thresholds. Require 1 reviewer for Tier 2, 2 for Tier 3.',
-    strict: 'Use strict thresholds. Require review-agent approval for all tiers. Require 2 reviewers for Tier 2, 3 for Tier 3. Enforce browser evidence for any UI changes.',
+    strict:
+      'Use strict thresholds. Require review-agent approval for all tiers. Require 2 reviewers for Tier 2, 3 for Tier 3. Enforce browser evidence for any UI changes.',
   }[prefs.strictnessLevel];
 
   return `Generate a \`harness.config.json\` file that defines the risk contract for this repository. This file is the central policy document that all CI gates, review agents, and remediation loops reference.
@@ -32,7 +33,7 @@ export function buildRiskContractPrompt(detection: DetectionResult, prefs: UserP
 ## Critical Paths
 
 The following paths have been identified as high-risk areas:
-${criticalPaths.map(p => `- \`${p}\``).join('\n')}
+${criticalPaths.map((p) => `- \`${p}\``).join('\n')}
 
 ## Strictness Level: ${prefs.strictnessLevel}
 
@@ -74,9 +75,9 @@ An object with three tiers, each containing:
 
 ### 3. \`commands\`
 Object containing the actual commands to run:
-- \`test\`: "${detection.testCommand ?? 'echo \"no test command detected\"'}"
-- \`build\`: "${detection.buildCommand ?? 'echo \"no build command detected\"'}"
-- \`lint\`: "${detection.lintCommand ?? 'echo \"no lint command detected\"'}"
+- \`test\`: "${detection.testCommand ?? 'echo "no test command detected"'}"
+- \`build\`: "${detection.buildCommand ?? 'echo "no build command detected"'}"
+- \`lint\`: "${detection.lintCommand ?? 'echo "no lint command detected"'}"
 - \`typeCheck\`: The type-check command appropriate for ${detection.typeChecker ?? 'none'}, or null
 
 ### 4. \`docsDrift\`
