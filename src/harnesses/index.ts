@@ -13,6 +13,7 @@ import { prTemplatesHarness } from './pr-templates.js';
 import { architecturalLintersHarness } from './architectural-linters.js';
 import { garbageCollectionHarness } from './garbage-collection.js';
 import { incidentHarnessLoopHarness } from './incident-harness-loop.js';
+import { issueImplementerHarness } from './issue-implementer.js';
 
 const allHarnesses: HarnessModule[] = [
   riskContractHarness,
@@ -28,6 +29,7 @@ const allHarnesses: HarnessModule[] = [
   architecturalLintersHarness,
   garbageCollectionHarness,
   incidentHarnessLoopHarness,
+  issueImplementerHarness,
 ];
 
 export function getHarnessModules(): HarnessModule[] {
@@ -38,4 +40,9 @@ export function getHarnessById(name: string): HarnessModule | undefined {
   return allHarnesses.find((h) => h.name === name);
 }
 
-export { type HarnessModule, type HarnessContext, type HarnessOutput, type UserPreferences } from './types.js';
+export {
+  type HarnessModule,
+  type HarnessContext,
+  type HarnessOutput,
+  type UserPreferences,
+} from './types.js';
