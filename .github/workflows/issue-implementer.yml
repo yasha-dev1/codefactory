@@ -1,0 +1,434 @@
+name: Issue Implementer Agent
+
+on:
+  issues:
+    types: [opened, labeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+
+concurrency:
+  group: issue-implementer-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  implement:
+    name: Implementer Agent
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run implementer guard
+        id: guard
+        env:
+          ISSUE_JSON: ${{ toJSON(github.event.issue) }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          DECISION=$(npx tsx scripts/issue-implementer-guard.ts --evaluate)
+          echo "decision<<GUARD_EOF" >> "$GITHUB_OUTPUT"
+          echo "$DECISION" >> "$GITHUB_OUTPUT"
+          echo "GUARD_EOF" >> "$GITHUB_OUTPUT"
+
+          SHOULD=$(echo "$DECISION" | jq -r '.shouldImplement')
+          BRANCH=$(echo "$DECISION" | jq -r '.branchName')
+          REASON=$(echo "$DECISION" | jq -r '.reason')
+          echo "should-implement=${SHOULD}" >> "$GITHUB_OUTPUT"
+          echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
+          echo "reason=${REASON}" >> "$GITHUB_OUTPUT"
+
+          echo "Guard: shouldImplement=${SHOULD}, branch=${BRANCH}"
+
+      - name: Skip — log reason
+        if: steps.guard.outputs.should-implement == 'false'
+        run: |
+          echo "::notice::Implementation skipped: ${{ steps.guard.outputs.reason }}"
+
+      - name: Post starting comment
+        if: steps.guard.outputs.should-implement == 'true'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const issueNumber = context.issue.number;
+            const branch = '${{ steps.guard.outputs.branch }}';
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body: [
+                `<!-- issue-implementer-start: #${issueNumber} -->`,
+                '## 🚀 Implementation Agent — Starting',
+                '',
+                `Working on branch \`${branch}\`.`,
+                '',
+                `**Run**: [${context.runId}](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
+                '',
+                '---',
+                '*🤖 [Issue Implementer Agent](https://github.com/codefactory) — automated implementation.*',
+              ].join('\n'),
+            });
+
+      - name: Create implementation branch
+        if: steps.guard.outputs.should-implement == 'true'
+        id: branch
+        run: |
+          BRANCH="${{ steps.guard.outputs.branch }}"
+          DEFAULT_BRANCH="${{ github.event.repository.default_branch }}"
+
+          git config user.name "implementer-bot[bot]"
+          git config user.email "implementer-bot[bot]@users.noreply.github.com"
+
+          # Delete remote branch if it exists (stale from a previous failed run)
+          git push origin --delete "${BRANCH}" 2>/dev/null || true
+
+          git checkout -b "${BRANCH}" "origin/${DEFAULT_BRANCH}"
+          echo "created=true" >> "$GITHUB_OUTPUT"
+          echo "✔ Created branch: ${BRANCH}"
+
+      - name: Run baseline validation
+        if: steps.guard.outputs.should-implement == 'true'
+        id: baseline
+        run: |
+          echo "Running baseline validation..."
+
+          LINT_OK="true"
+          TYPECHECK_OK="true"
+          TEST_OK="true"
+          BUILD_OK="true"
+
+          npm run lint 2>/dev/null || LINT_OK="false"
+          npm run typecheck 2>/dev/null || TYPECHECK_OK="false"
+          npm test 2>/dev/null || TEST_OK="false"
+          npm run build 2>/dev/null || BUILD_OK="false"
+
+          echo "lint=${LINT_OK}" >> "$GITHUB_OUTPUT"
+          echo "typecheck=${TYPECHECK_OK}" >> "$GITHUB_OUTPUT"
+          echo "test=${TEST_OK}" >> "$GITHUB_OUTPUT"
+          echo "build=${BUILD_OK}" >> "$GITHUB_OUTPUT"
+
+          echo "Baseline: lint=${LINT_OK}, typecheck=${TYPECHECK_OK}, test=${TEST_OK}, build=${BUILD_OK}"
+
+      - name: Read implementer prompt
+        if: steps.guard.outputs.should-implement == 'true'
+        id: prompt-file
+        run: |
+          if [[ -f ".codefactory/prompts/issue-implementer.md" ]]; then
+            {
+              echo "content<<PROMPT_EOF"
+              cat .codefactory/prompts/issue-implementer.md
+              echo "PROMPT_EOF"
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "content=Implement the feature or fix described in the issue." >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build implementation prompt
+        if: steps.guard.outputs.should-implement == 'true'
+        id: build-prompt
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          IMPLEMENTER_TEMPLATE: ${{ steps.prompt-file.outputs.content }}
+          BASELINE_LINT: ${{ steps.baseline.outputs.lint }}
+          BASELINE_TYPECHECK: ${{ steps.baseline.outputs.typecheck }}
+          BASELINE_TEST: ${{ steps.baseline.outputs.test }}
+          BASELINE_BUILD: ${{ steps.baseline.outputs.build }}
+        with:
+          script: |
+            const fs = require('fs');
+            const issue = context.payload.issue;
+            const template = process.env.IMPLEMENTER_TEMPLATE || '';
+
+            let conventions = '';
+            try { conventions = fs.readFileSync('CLAUDE.md', 'utf-8').slice(0, 6000); } catch {}
+
+            let config = '';
+            try { config = fs.readFileSync('harness.config.json', 'utf-8'); } catch {}
+
+            const prompt = [
+              template,
+              '',
+              '## Issue to Implement',
+              '',
+              `**Number**: #${issue.number}`,
+              `**Title**: ${issue.title}`,
+              `**Author**: ${issue.user.login}`,
+              '',
+              '### Body',
+              '',
+              issue.body || '*(empty body)*',
+              '',
+              '## Project Conventions (from CLAUDE.md)',
+              '',
+              conventions || 'No CLAUDE.md found.',
+              '',
+              '## Harness Configuration',
+              '',
+              '```json',
+              config || '{}',
+              '```',
+              '',
+              '## Baseline Quality State',
+              '',
+              `| Check | Baseline |`,
+              `|-------|----------|`,
+              `| Lint | ${process.env.BASELINE_LINT === 'true' ? 'passing' : 'failing'} |`,
+              `| Type Check | ${process.env.BASELINE_TYPECHECK === 'true' ? 'passing' : 'failing'} |`,
+              `| Tests | ${process.env.BASELINE_TEST === 'true' ? 'passing' : 'failing'} |`,
+              `| Build | ${process.env.BASELINE_BUILD === 'true' ? 'passing' : 'failing'} |`,
+              '',
+              'You must NOT introduce regressions — if a check was passing in baseline, it must still pass after your changes.',
+            ].join('\n');
+
+            core.setOutput('prompt', prompt);
+            core.info(`Implementation prompt built (${prompt.length} chars)`);
+
+      - name: Run Claude implementation
+        if: steps.guard.outputs.should-implement == 'true'
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: ${{ steps.build-prompt.outputs.prompt }}
+          claude_args: '--max-turns 100'
+
+      - name: Check for file changes
+        if: steps.guard.outputs.should-implement == 'true'
+        id: changes
+        run: |
+          CHANGED=$(git diff --name-only 2>/dev/null || echo "")
+          UNTRACKED=$(git ls-files --others --exclude-standard 2>/dev/null || echo "")
+          ALL_FILES=$(echo -e "${CHANGED}\n${UNTRACKED}" | sort -u | grep -v '^$' || echo "")
+
+          if [[ -z "$ALL_FILES" ]]; then
+            echo "has-changes=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No files were modified by the implementation agent."
+          else
+            echo "has-changes=true" >> "$GITHUB_OUTPUT"
+            COUNT=$(echo "$ALL_FILES" | wc -l)
+            echo "count=${COUNT}" >> "$GITHUB_OUTPUT"
+            {
+              echo "files<<FILES_EOF"
+              echo "$ALL_FILES"
+              echo "FILES_EOF"
+            } >> "$GITHUB_OUTPUT"
+            echo "✔ ${COUNT} file(s) changed"
+          fi
+
+      - name: Verify no protected files modified
+        if: steps.changes.outputs.has-changes == 'true'
+        id: protected
+        run: |
+          MODIFIED=$(git diff --name-only)
+          VIOLATIONS=""
+
+          while IFS= read -r file; do
+            [[ -z "$file" ]] && continue
+            case "$file" in
+              .github/workflows/*|harness.config.json|CLAUDE.md|package-lock.json|yarn.lock|pnpm-lock.yaml)
+                VIOLATIONS="${VIOLATIONS}  - ${file}\n"
+                git checkout -- "$file"
+                echo "::warning::Reverted protected file: ${file}"
+                ;;
+            esac
+          done <<< "$MODIFIED"
+
+          if [[ -n "$VIOLATIONS" ]]; then
+            echo "reverted=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::Reverted modifications to protected files."
+          else
+            echo "reverted=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run quality gates
+        if: steps.changes.outputs.has-changes == 'true'
+        id: quality
+        run: |
+          echo "Running quality gates..."
+
+          LINT_OK="true"
+          TYPECHECK_OK="true"
+          TEST_OK="true"
+          BUILD_OK="true"
+
+          npm run lint || LINT_OK="false"
+          npm run typecheck || TYPECHECK_OK="false"
+          npm test || TEST_OK="false"
+          npm run build || BUILD_OK="false"
+
+          echo "lint=${LINT_OK}" >> "$GITHUB_OUTPUT"
+          echo "typecheck=${TYPECHECK_OK}" >> "$GITHUB_OUTPUT"
+          echo "test=${TEST_OK}" >> "$GITHUB_OUTPUT"
+          echo "build=${BUILD_OK}" >> "$GITHUB_OUTPUT"
+
+          # Compare against baseline — only fail on regressions
+          REGRESSED="false"
+          if [[ "${{ steps.baseline.outputs.lint }}" == "true" && "$LINT_OK" == "false" ]]; then
+            REGRESSED="true"
+            echo "::error::Regression: lint was passing, now failing."
+          fi
+          if [[ "${{ steps.baseline.outputs.typecheck }}" == "true" && "$TYPECHECK_OK" == "false" ]]; then
+            REGRESSED="true"
+            echo "::error::Regression: typecheck was passing, now failing."
+          fi
+          if [[ "${{ steps.baseline.outputs.test }}" == "true" && "$TEST_OK" == "false" ]]; then
+            REGRESSED="true"
+            echo "::error::Regression: tests were passing, now failing."
+          fi
+          if [[ "${{ steps.baseline.outputs.build }}" == "true" && "$BUILD_OK" == "false" ]]; then
+            REGRESSED="true"
+            echo "::error::Regression: build was passing, now failing."
+          fi
+
+          echo "regressed=${REGRESSED}" >> "$GITHUB_OUTPUT"
+          echo "Quality gates: lint=${LINT_OK}, typecheck=${TYPECHECK_OK}, test=${TEST_OK}, build=${BUILD_OK}, regressed=${REGRESSED}"
+
+      - name: Commit, push, and create PR
+        if: steps.changes.outputs.has-changes == 'true' && steps.quality.outputs.regressed == 'false'
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH="${{ steps.guard.outputs.branch }}"
+          ISSUE_NUMBER="${{ github.event.issue.number }}"
+          ISSUE_TITLE="${{ github.event.issue.title }}"
+          DEFAULT_BRANCH="${{ github.event.repository.default_branch }}"
+
+          # Stage all changes (new + modified)
+          git add -A
+
+          MODIFIED=$(git diff --cached --name-only | wc -l | tr -d ' ')
+
+          git commit -m "$(cat <<COMMIT_EOF
+          feat: implement #${ISSUE_NUMBER} — ${ISSUE_TITLE}
+
+          Automated implementation for issue #${ISSUE_NUMBER}.
+          Files changed: ${MODIFIED}
+
+          Closes #${ISSUE_NUMBER}
+          COMMIT_EOF
+          )"
+
+          git push -u origin "${BRANCH}"
+
+          # Create PR
+          PR_URL=$(gh pr create \
+            --base "${DEFAULT_BRANCH}" \
+            --head "${BRANCH}" \
+            --title "feat: ${ISSUE_TITLE}" \
+            --label "agent-pr" \
+            --body "$(cat <<PR_EOF
+          ## Summary
+
+          Automated implementation for #${ISSUE_NUMBER}.
+
+          <!-- issue-implementer: #${ISSUE_NUMBER} -->
+
+          ## Quality Gates
+
+          | Check | Status |
+          |-------|--------|
+          | Lint | ${{ steps.quality.outputs.lint == 'true' && '✅' || '⚠️ (baseline was also failing)' }} |
+          | Type Check | ${{ steps.quality.outputs.typecheck == 'true' && '✅' || '⚠️ (baseline was also failing)' }} |
+          | Tests | ${{ steps.quality.outputs.test == 'true' && '✅' || '⚠️ (baseline was also failing)' }} |
+          | Build | ${{ steps.quality.outputs.build == 'true' && '✅' || '⚠️ (baseline was also failing)' }} |
+
+          Closes #${ISSUE_NUMBER}
+
+          ---
+          *🤖 [Issue Implementer Agent](https://github.com/codefactory) — automated implementation.*
+          PR_EOF
+          )")
+
+          echo "url=${PR_URL}" >> "$GITHUB_OUTPUT"
+          PR_NUM=$(echo "$PR_URL" | grep -oP '\d+$')
+          echo "number=${PR_NUM}" >> "$GITHUB_OUTPUT"
+          echo "✔ Created PR: ${PR_URL}"
+
+      - name: Post PR-created comment on issue
+        if: steps.pr.outputs.url
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          PR_URL: ${{ steps.pr.outputs.url }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        with:
+          script: |
+            const issueNumber = context.issue.number;
+            const prUrl = process.env.PR_URL;
+            const prNumber = process.env.PR_NUMBER;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body: [
+                `<!-- issue-implementer: #${issueNumber} -->`,
+                '## ✅ Implementation Agent — PR Created',
+                '',
+                `Pull request ${prUrl} has been created to address this issue.`,
+                '',
+                '---',
+                '*🤖 [Issue Implementer Agent](https://github.com/codefactory) — automated implementation.*',
+              ].join('\n'),
+            });
+
+      - name: Failure handler
+        if: failure() && steps.guard.outputs.should-implement == 'true'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const issueNumber = context.issue.number;
+
+            // Add judgment label
+            try {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: 'agent:needs-judgment',
+                color: 'E4E669',
+                description: 'Agent needs human judgment to proceed',
+              });
+            } catch {}
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              labels: ['agent:needs-judgment'],
+            });
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body: [
+                `<!-- issue-implementer-failed: #${issueNumber} -->`,
+                '## ❌ Implementation Agent — Failed',
+                '',
+                'The implementation agent encountered an error while working on this issue.',
+                'A human should review the failure and decide next steps.',
+                '',
+                `**Branch**: \`${{ steps.guard.outputs.branch }}\``,
+                `**Run**: [${context.runId}](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
+                '',
+                '---',
+                '*🤖 [Issue Implementer Agent](https://github.com/codefactory) — automated implementation.*',
+              ].join('\n'),
+            });

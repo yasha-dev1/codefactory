@@ -201,8 +201,28 @@
         "/home/yasha/Desktop/projects/codefactory/.github/workflows/weekly-metrics.yml",
         "/home/yasha/Desktop/projects/codefactory/harness.config.json"
       ]
+    },
+    {
+      "name": "issue-triage",
+      "enabled": true,
+      "generatedAt": "2026-02-20T00:00:00.000Z",
+      "files": [
+        "/home/yasha/Desktop/projects/codefactory/.github/workflows/issue-triage.yml",
+        "/home/yasha/Desktop/projects/codefactory/scripts/issue-triage-guard.ts",
+        "/home/yasha/Desktop/projects/codefactory/.codefactory/prompts/issue-triage.md"
+      ]
+    },
+    {
+      "name": "issue-implementer",
+      "enabled": true,
+      "generatedAt": "2026-02-20T00:00:00.000Z",
+      "files": [
+        "/home/yasha/Desktop/projects/codefactory/.github/workflows/issue-implementer.yml",
+        "/home/yasha/Desktop/projects/codefactory/scripts/issue-implementer-guard.ts",
+        "/home/yasha/Desktop/projects/codefactory/.codefactory/prompts/issue-implementer.md"
+      ]
     }
   ],
   "generatedAt": "2026-02-19T21:32:46.278Z",
-  "lastUpdated": "2026-02-19T21:32:46.278Z"
+  "lastUpdated": "2026-02-20T00:00:00.000Z"
 }
