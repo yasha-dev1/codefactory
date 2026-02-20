@@ -5,7 +5,7 @@ import { getPackageInfo } from '../utils/package-info.js';
 const pkg = getPackageInfo();
 
 // "CF" monogram using box-drawing characters (single-width, renders correctly in all terminals)
-const CF_LOGO_LINES = ['╔══╗ ╔══╗', '║    ╠══╝', '║    ║   ', '╚══╝ ╚   '];
+const CF_LOGO_LINES = ['╔══╗ ╔═══', '║    ╠══╝', '║    ║   ', '╚══╝ ╚   '];
 
 const ACCENT = '#FF8C00'; // Orange, same aesthetic as Claude Code
 
