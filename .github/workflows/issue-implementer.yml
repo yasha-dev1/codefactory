@@ -3,6 +3,12 @@ name: Issue Implementer Agent
 on:
   issues:
     types: [opened, labeled]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Issue number to implement'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -11,7 +17,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: issue-implementer-${{ github.event.issue.number }}
+  group: issue-implementer-${{ github.event.issue.number || inputs.issue_number }}
   cancel-in-progress: false
 
 jobs:
@@ -35,10 +41,25 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Fetch issue JSON (workflow_dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        id: fetch-issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ISSUE_NUM="${{ inputs.issue_number }}"
+          ISSUE_DATA=$(gh issue view "$ISSUE_NUM" --json number,title,body,labels,user)
+          {
+            echo "json<<ISSUE_EOF"
+            echo "$ISSUE_DATA"
+            echo "ISSUE_EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "Fetched issue #${ISSUE_NUM}"
+
       - name: Run implementer guard
         id: guard
         env:
-          ISSUE_JSON: ${{ toJSON(github.event.issue) }}
+          ISSUE_JSON: ${{ github.event_name == 'workflow_dispatch' && steps.fetch-issue.outputs.json || toJSON(github.event.issue) }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -50,11 +71,15 @@ jobs:
           SHOULD=$(echo "$DECISION" | jq -r '.shouldImplement')
           BRANCH=$(echo "$DECISION" | jq -r '.branchName')
           REASON=$(echo "$DECISION" | jq -r '.reason')
+          ISSUE_NUM=$(echo "$DECISION" | jq -r '.issueNumber')
+          ISSUE_TITLE=$(echo "$DECISION" | jq -r '.issueTitle')
           echo "should-implement=${SHOULD}" >> "$GITHUB_OUTPUT"
           echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
           echo "reason=${REASON}" >> "$GITHUB_OUTPUT"
+          echo "issue-number=${ISSUE_NUM}" >> "$GITHUB_OUTPUT"
+          echo "issue-title=${ISSUE_TITLE}" >> "$GITHUB_OUTPUT"
 
-          echo "Guard: shouldImplement=${SHOULD}, branch=${BRANCH}"
+          echo "Guard: shouldImplement=${SHOULD}, branch=${BRANCH}, issue=#${ISSUE_NUM}"
 
       - name: Skip — log reason
         if: steps.guard.outputs.should-implement == 'false'
@@ -66,7 +91,7 @@ jobs:
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         with:
           script: |
-            const issueNumber = context.issue.number;
+            const issueNumber = parseInt('${{ steps.guard.outputs.issue-number }}', 10);
             const branch = '${{ steps.guard.outputs.branch }}';
 
             await github.rest.issues.createComment({
@@ -91,7 +116,7 @@ jobs:
         id: branch
         run: |
           BRANCH="${{ steps.guard.outputs.branch }}"
-          DEFAULT_BRANCH="${{ github.event.repository.default_branch }}"
+          DEFAULT_BRANCH="${{ github.event.repository.default_branch || 'main' }}"
 
           git config user.name "implementer-bot[bot]"
           git config user.email "implementer-bot[bot]@users.noreply.github.com"
@@ -150,10 +175,11 @@ jobs:
           BASELINE_TYPECHECK: ${{ steps.baseline.outputs.typecheck }}
           BASELINE_TEST: ${{ steps.baseline.outputs.test }}
           BASELINE_BUILD: ${{ steps.baseline.outputs.build }}
+          ISSUE_JSON: ${{ github.event_name == 'workflow_dispatch' && steps.fetch-issue.outputs.json || toJSON(github.event.issue) }}
         with:
           script: |
             const fs = require('fs');
-            const issue = context.payload.issue;
+            const issue = JSON.parse(process.env.ISSUE_JSON || '{}');
             const template = process.env.IMPLEMENTER_TEMPLATE || '';
 
             let conventions = '';
@@ -169,7 +195,7 @@ jobs:
               '',
               `**Number**: #${issue.number}`,
               `**Title**: ${issue.title}`,
-              `**Author**: ${issue.user.login}`,
+              `**Author**: ${(issue.user || {}).login || 'unknown'}`,
               '',
               '### Body',
               '',
@@ -307,9 +333,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           BRANCH="${{ steps.guard.outputs.branch }}"
-          ISSUE_NUMBER="${{ github.event.issue.number }}"
-          ISSUE_TITLE="${{ github.event.issue.title }}"
-          DEFAULT_BRANCH="${{ github.event.repository.default_branch }}"
+          ISSUE_NUMBER="${{ steps.guard.outputs.issue-number }}"
+          ISSUE_TITLE="${{ steps.guard.outputs.issue-title }}"
+          DEFAULT_BRANCH="${{ github.event.repository.default_branch || 'main' }}"
 
           # Stage all changes (new + modified)
           git add -A
@@ -370,7 +396,7 @@ jobs:
           PR_NUMBER: ${{ steps.pr.outputs.number }}
         with:
           script: |
-            const issueNumber = context.issue.number;
+            const issueNumber = parseInt('${{ steps.guard.outputs.issue-number }}', 10);
             const prUrl = process.env.PR_URL;
             const prNumber = process.env.PR_NUMBER;
 
@@ -394,7 +420,7 @@ jobs:
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         with:
           script: |
-            const issueNumber = context.issue.number;
+            const issueNumber = parseInt('${{ steps.guard.outputs.issue-number }}', 10);
 
             // Add judgment label
             try {

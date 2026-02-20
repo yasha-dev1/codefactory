@@ -7,6 +7,7 @@ on:
 permissions:
   issues: write
   contents: read
+  actions: write
   id-token: write
 
 concurrency:
@@ -316,6 +317,7 @@ jobs:
 
       - name: Route triage decision
         if: steps.guard.outputs.should-triage == 'true'
+        id: route
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         env:
           PARSED: ${{ steps.verdict.outputs.parsed }}
@@ -486,6 +488,9 @@ jobs:
               core.info(`Added labels: ${labelsToAdd.join(', ')}`);
             }
 
+            // Signal implementer dispatch
+            core.setOutput('should-implement', String(labelsToAdd.includes('agent:implement')));
+
             // Post comment
             commentSections.push(
               '',
@@ -499,6 +504,17 @@ jobs:
               issue_number: issueNumber,
               body: commentSections.join('\n'),
             });
+
+      - name: Dispatch implementer workflow
+        if: steps.route.outputs.should-implement == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ISSUE_NUM="${{ github.event.issue.number }}"
+          echo "Dispatching implementer for issue #${ISSUE_NUM}..."
+          gh workflow run issue-implementer.yml \
+            --field issue_number="${ISSUE_NUM}"
+          echo "✔ Implementer workflow dispatched."
 
       - name: Failure handler
         if: failure() && steps.guard.outputs.should-triage == 'true'
