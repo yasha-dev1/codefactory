@@ -96,22 +96,12 @@ const _borderedInput = createPrompt<string, BorderedInputConfig>((config, done) 
     suggestionContent = '\n' + lines.join('\n');
   }
 
-  // Wrap value text so it stays inside the bordered box
-  const wrapWidth = cols;
-  const wrappedLines: string[] = [];
-  if (value.length === 0) {
-    wrappedLines.push('');
-  } else {
-    for (let i = 0; i < value.length; i += wrapWidth) {
-      wrappedLines.push(value.slice(i, i + wrapWidth));
-    }
-  }
-
-  const allButLast = wrappedLines.slice(0, -1);
-  const lastLine = wrappedLines[wrappedLines.length - 1] ?? '';
-  const prefixContent = allButLast.map((line) => b('\u2502 ') + line).join('\n');
-  const lastLineContent = b('\u2502 ') + lastLine;
-  const content = prefixContent ? prefixContent + '\n' + lastLineContent : lastLineContent;
+  // Keep the full value on a single content line so that @inquirer/core's
+  // screen manager can correctly compute the cursor position.  Manual wrapping
+  // broke the invariant that the last content line equals <prompt><rl.line>,
+  // which caused the cursor to drift one line below on wrap.  The screen
+  // manager's own breakLines() handles visual wrapping at terminal width.
+  const content = b('\u2502 ') + value;
 
   return [top + '\n' + content, bottom + (hint ? '\n' + hint : '') + suggestionContent];
 });
