@@ -1,6 +1,7 @@
 import {
   createPrompt,
   useState,
+  useRef,
   useKeypress,
   isEnterKey,
   isUpKey,
@@ -23,9 +24,12 @@ export interface BorderedInputConfig {
 
 const MAX_SUGGESTIONS = 5;
 
+const DOUBLE_ESC_MS = 500;
+
 const _borderedInput = createPrompt<string, BorderedInputConfig>((config, done) => {
   const [value, setValue] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const lastEscRef = useRef(0);
 
   const accentColor = config.accentColor ?? '#FF8C00';
   const cols = Math.max(40, (process.stdout.columns || 80) - 4);
@@ -40,6 +44,19 @@ const _borderedInput = createPrompt<string, BorderedInputConfig>((config, done) 
     : [];
 
   useKeypress((key, rl) => {
+    if (key.name === 'escape') {
+      const now = Date.now();
+      if (lastEscRef.current > 0 && now - lastEscRef.current < DOUBLE_ESC_MS) {
+        rl.write('\x15');
+        setValue('');
+        setSelectedIndex(0);
+        lastEscRef.current = 0;
+      } else {
+        lastEscRef.current = now;
+      }
+      return;
+    }
+
     if (isEnterKey(key)) {
       if (showSuggestions && filtered.length > 0) {
         const selected = filtered[selectedIndex];
