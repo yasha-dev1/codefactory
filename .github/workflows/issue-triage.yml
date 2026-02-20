@@ -156,34 +156,115 @@ jobs:
           prompt: ${{ steps.build-prompt.outputs.prompt }}
           claude_args: '--max-turns 15'
 
-      - name: Parse triage verdict and detect bug for reproduction
+      - name: Extract verdict from execution output
         if: steps.guard.outputs.should-triage == 'true'
         id: verdict
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         env:
-          CLAUDE_OUTPUT: ${{ steps.claude-triage.outputs.claude_output || '' }}
+          EXECUTION_FILE: ${{ steps.claude-triage.outputs.execution_file }}
         with:
           script: |
-            const output = process.env.CLAUDE_OUTPUT || '';
+            const fs = require('fs');
+            const execFile = process.env.EXECUTION_FILE || '';
 
-            // Try to extract JSON from Claude's output
+            // --- Strategy 1: Read execution file ---
+            let claudeText = '';
+            if (execFile && fs.existsSync(execFile)) {
+              try {
+                const raw = fs.readFileSync(execFile, 'utf-8');
+
+                // The execution file may be JSON or JSONL
+                // Try single JSON object first
+                try {
+                  const data = JSON.parse(raw);
+                  // Claude CLI result format: { type: "result", result: "..." }
+                  if (data.result) {
+                    claudeText = typeof data.result === 'string' ? data.result : JSON.stringify(data.result);
+                  }
+                } catch {
+                  // Try JSONL — scan each line for assistant messages or result
+                  for (const line of raw.trim().split('\n')) {
+                    try {
+                      const msg = JSON.parse(line);
+                      if (msg.type === 'result' && msg.result) {
+                        claudeText = typeof msg.result === 'string' ? msg.result : JSON.stringify(msg.result);
+                      } else if (msg.role === 'assistant' && msg.content) {
+                        // Extract text from content blocks
+                        const texts = (Array.isArray(msg.content) ? msg.content : [msg.content])
+                          .filter(b => typeof b === 'string' || b.type === 'text')
+                          .map(b => typeof b === 'string' ? b : b.text);
+                        if (texts.length > 0) claudeText = texts.join('\n');
+                      }
+                    } catch {}
+                  }
+                }
+
+                core.info(`Extracted ${claudeText.length} chars from execution file`);
+              } catch (e) {
+                core.warning(`Failed to read execution file: ${e.message}`);
+              }
+            } else {
+              core.warning(`No execution file found at: ${execFile}`);
+            }
+
+            // --- Strategy 2: Fall back to reading the latest issue comment ---
+            if (!claudeText) {
+              core.info('Falling back to reading latest issue comment...');
+              try {
+                const { data: comments } = await github.rest.issues.listComments({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  per_page: 10,
+                });
+                // Look for the most recent comment with JSON verdict (not our own marker comments)
+                for (const c of comments.reverse()) {
+                  if (c.body && c.body.includes('"actionable"') && !c.body.includes('<!-- issue-triage')) {
+                    claudeText = c.body;
+                    core.info('Found verdict in issue comment');
+                    break;
+                  }
+                }
+              } catch (e) {
+                core.warning(`Failed to read issue comments: ${e.message}`);
+              }
+            }
+
+            if (!claudeText) {
+              core.warning('No Claude output found from execution file or comments');
+              core.setOutput('parsed', 'false');
+              core.setOutput('raw-text', '');
+              return;
+            }
+
+            // --- Parse the JSON verdict ---
             let verdict = null;
             try {
-              // Look for JSON in the output (may be wrapped in markdown fences)
-              const jsonMatch = output.match(/\{[\s\S]*?"actionable"[\s\S]*?\}/);
+              // Try to find a JSON object with "actionable" field
+              const jsonMatch = claudeText.match(/\{[\s\S]*?"actionable"[\s\S]*?\}/);
               if (jsonMatch) {
                 verdict = JSON.parse(jsonMatch[0]);
               }
             } catch (e) {
-              core.warning(`Failed to parse triage verdict: ${e.message}`);
+              core.warning(`JSON parse failed: ${e.message}`);
             }
 
             if (!verdict) {
+              // Try stripping markdown fences
+              try {
+                const fenceMatch = claudeText.match(/```(?:json)?\s*([\s\S]*?)```/);
+                if (fenceMatch) {
+                  verdict = JSON.parse(fenceMatch[1].trim());
+                }
+              } catch {}
+            }
+
+            if (!verdict) {
+              core.warning('Could not parse verdict JSON from Claude output');
               core.setOutput('parsed', 'false');
-              core.setOutput('actionable', 'false');
-              core.setOutput('confidence', '0');
-              core.setOutput('complexity', 'unknown');
-              core.setOutput('is-bug', 'false');
+              // Store raw text for debugging in the route step
+              const truncated = claudeText.slice(0, 2000);
+              core.setOutput('raw-text', truncated);
               return;
             }
 
@@ -195,13 +276,13 @@ jobs:
             core.setOutput('missing-info', JSON.stringify(verdict.missingInfo || []));
             core.setOutput('suggested-labels', JSON.stringify(verdict.suggestedLabels || []));
 
-            // Detect if this is a bug report for potential browser reproduction
             const isBug = (verdict.suggestedLabels || []).some(
               (l) => l === 'bug' || l === 'ui-bug' || l === 'visual-bug'
             );
             core.setOutput('is-bug', String(isBug));
             core.setOutput('reproduced', String(verdict.reproduced || false));
             core.setOutput('reproduction-notes', verdict.reproductionNotes || '');
+            core.setOutput('raw-text', '');
 
             core.info(`Verdict: actionable=${verdict.actionable}, confidence=${verdict.confidence}, complexity=${verdict.estimatedComplexity}, isBug=${isBug}`);
 
@@ -217,7 +298,6 @@ jobs:
         if: steps.verdict.outputs.is-bug == 'true' && steps.verdict.outputs.actionable == 'true'
         id: devserver
         run: |
-          # Check package.json for common dev server scripts
           DEV_CMD=""
           if [[ -f "package.json" ]]; then
             for script in dev start serve; do
@@ -246,8 +326,6 @@ jobs:
         id: reproduce
         continue-on-error: true
         uses: anthropics/claude-code-action@v1
-        env:
-          DEV_CMD: ${{ steps.devserver.outputs.cmd }}
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: |
@@ -284,14 +362,37 @@ jobs:
         id: repro-result
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         env:
-          REPRO_OUTPUT: ${{ steps.reproduce.outputs.claude_output || '' }}
+          REPRO_EXECUTION_FILE: ${{ steps.reproduce.outputs.execution_file }}
         with:
           script: |
-            const output = process.env.REPRO_OUTPUT || '';
+            const fs = require('fs');
+            const execFile = process.env.REPRO_EXECUTION_FILE || '';
+            let text = '';
+
+            if (execFile && fs.existsSync(execFile)) {
+              try {
+                const raw = fs.readFileSync(execFile, 'utf-8');
+                try {
+                  const data = JSON.parse(raw);
+                  if (data.result) text = typeof data.result === 'string' ? data.result : JSON.stringify(data.result);
+                } catch {
+                  for (const line of raw.trim().split('\n').reverse()) {
+                    try {
+                      const msg = JSON.parse(line);
+                      if (msg.type === 'result' && msg.result) {
+                        text = typeof msg.result === 'string' ? msg.result : JSON.stringify(msg.result);
+                        break;
+                      }
+                    } catch {}
+                  }
+                }
+              } catch {}
+            }
+
             try {
-              const jsonMatch = output.match(/\{[\s\S]*?"reproduced"[\s\S]*?\}/);
-              if (jsonMatch) {
-                const result = JSON.parse(jsonMatch[0]);
+              const match = text.match(/\{[\s\S]*?"reproduced"[\s\S]*?\}/);
+              if (match) {
+                const result = JSON.parse(match[0]);
                 core.setOutput('reproduced', String(result.reproduced || false));
                 core.setOutput('notes', result.notes || '');
                 core.info(`Reproduction result: reproduced=${result.reproduced}`);
@@ -318,6 +419,7 @@ jobs:
           REPRO_RAN: ${{ steps.reproduce.outcome || 'skipped' }}
           REPRODUCED: ${{ steps.repro-result.outputs.reproduced || 'false' }}
           REPRO_NOTES: ${{ steps.repro-result.outputs.notes || '' }}
+          RAW_TEXT: ${{ steps.verdict.outputs.raw-text }}
         with:
           script: |
             const issueNumber = context.issue.number;
@@ -330,6 +432,7 @@ jobs:
             const reproRan = process.env.REPRO_RAN === 'success';
             const reproduced = process.env.REPRODUCED === 'true';
             const reproNotes = process.env.REPRO_NOTES || '';
+            const rawText = process.env.RAW_TEXT || '';
 
             let missingInfo = [];
             let suggestedLabels = [];
@@ -340,7 +443,7 @@ jobs:
             const commentSections = [`<!-- issue-triage: #${issueNumber} -->`];
 
             if (!parsed) {
-              // Failed to parse — add failure label
+              // Failed to parse — add failure label and show what Claude said
               labelsToAdd.push('triage:failed');
               commentSections.push(
                 '## ⚠️ Issue Triage — Parse Failure',
@@ -348,8 +451,19 @@ jobs:
                 'The triage agent could not produce a valid verdict for this issue.',
                 'A human should review and triage manually.',
               );
+              if (rawText) {
+                commentSections.push(
+                  '',
+                  '<details><summary>Agent raw output (for debugging)</summary>',
+                  '',
+                  '```',
+                  rawText.slice(0, 1500),
+                  '```',
+                  '',
+                  '</details>',
+                );
+              }
             } else if (actionable) {
-              // Determine if we should add agent:implement
               let shouldImplement = confidence >= 0.7;
 
               // Bug reproduction boost
@@ -367,7 +481,6 @@ jobs:
                     commentSections.push('', `**Reproduction notes**: ${reproNotes}`);
                   }
                 } else {
-                  // Bug not reproduced — ask for better steps
                   shouldImplement = false;
                   labelsToAdd.push('needs-more-info');
                   commentSections.push(
@@ -395,16 +508,19 @@ jobs:
                   `**Complexity**: ${complexity}`,
                 );
               } else {
-                // Actionable but low confidence
+                // Actionable but low confidence — ask clarifying questions
                 labelsToAdd.push('needs-more-info');
+                const missingItems = missingInfo.length > 0
+                  ? missingInfo.map((m) => `- ${m}`)
+                  : ['- More details about the expected behavior', '- Steps to reproduce or context'];
                 commentSections.push(
                   '## 🔍 Issue Triage — More Details Needed',
                   '',
                   `**Summary**: ${summary}`,
                   `**Confidence**: ${confidence} (below 0.7 threshold)`,
                   '',
-                  'Please add more details to help the implementation agent:',
-                  ...missingInfo.map((m) => `- ${m}`),
+                  'To help the implementation agent, please clarify:',
+                  ...missingItems,
                 );
               }
 
@@ -412,20 +528,24 @@ jobs:
                 labelsToAdd.push('agent:implement');
               }
 
-              // High complexity → also flag for human review
               if (complexity === 'high') {
                 labelsToAdd.push('needs-human-review');
               }
             } else {
-              // Not actionable
+              // Not actionable — ask clarifying questions
               labelsToAdd.push('needs-more-info');
+              const missingItems = missingInfo.length > 0
+                ? missingInfo.map((m) => `- ${m}`)
+                : ['- A clear description of what you expect to happen', '- Steps to reproduce the issue'];
               commentSections.push(
                 '## 📋 Issue Triage — Not Actionable',
                 '',
-                `**Summary**: ${summary}`,
+                `**Summary**: ${summary || 'Unable to determine issue intent'}`,
                 '',
-                'This issue needs more information before it can be implemented:',
-                ...missingInfo.map((m) => `- ${m}`),
+                'This issue needs more information before it can be implemented. Please provide:',
+                ...missingItems,
+                '',
+                '*Edit this issue with the requested details and we will re-evaluate automatically.*',
               );
             }
 
@@ -433,7 +553,6 @@ jobs:
             const internalLabels = ['agent:implement', 'needs-more-info', 'triage:failed', 'needs-human-review'];
             for (const label of suggestedLabels) {
               if (!internalLabels.includes(label) && !labelsToAdd.includes(label)) {
-                // Create label if needed
                 try {
                   await github.rest.issues.createLabel({
                     owner: context.repo.owner,
@@ -478,7 +597,6 @@ jobs:
           script: |
             const issueNumber = context.issue.number;
 
-            // Add failure label
             try {
               await github.rest.issues.createLabel({
                 owner: context.repo.owner,
