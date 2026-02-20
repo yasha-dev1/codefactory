@@ -142,6 +142,10 @@ jobs:
           node-version: 22
           cache: npm
 
+      - name: Install Claude Code CLI
+        if: steps.tier.outputs.tier != '1' && steps.dedup.outputs.skip != 'true'
+        run: npm install -g @anthropic-ai/claude-code
+
       - name: Get PR diff
         if: steps.tier.outputs.tier != '1' && steps.dedup.outputs.skip != 'true'
         id: diff
@@ -287,7 +291,9 @@ jobs:
               };
             }
 
-            core.setOutput('result', JSON.stringify(reviewResult));
+            // Use 'review-json' instead of 'result' — actions/github-script reserves
+            // the 'result' output name for the script's return value and overwrites it.
+            core.setOutput('review-json', JSON.stringify(reviewResult));
             core.setOutput('verdict', reviewResult.verdict);
             core.info(`Review verdict: ${reviewResult.verdict}`);
 
@@ -295,7 +301,7 @@ jobs:
         if: always() && steps.tier.outputs.tier != '1' && steps.dedup.outputs.skip != 'true'
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         env:
-          REVIEW_RESULT: ${{ steps.review.outputs.result }}
+          REVIEW_RESULT: ${{ steps.review.outputs.review-json }}
         with:
           script: |
             const headSha = context.payload.pull_request.head.sha;
@@ -388,7 +394,7 @@ jobs:
         env:
           CHECK_RUN_ID: ${{ steps.check.outputs.check-run-id }}
           REVIEW_VERDICT: ${{ steps.review.outputs.verdict }}
-          REVIEW_RESULT: ${{ steps.review.outputs.result }}
+          REVIEW_RESULT: ${{ steps.review.outputs.review-json }}
         with:
           script: |
             const checkRunId = parseInt(process.env.CHECK_RUN_ID);

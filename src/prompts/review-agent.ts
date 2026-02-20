@@ -143,8 +143,10 @@ The review agent workflow should then use this prompt to instruct Claude to outp
 
 When invoking the Claude CLI in CI, follow these rules:
 
+- **Install the Claude CLI** before using it: add \`npm install -g @anthropic-ai/claude-code\` as a step after Node.js setup.
 - **Write the prompt to a temp file** and pipe it via \`cat /tmp/prompt.txt | claude ...\`. Do NOT use \`echo '...'\` with shell escaping — diffs contain special characters that break shell quoting.
 - **Parse the \`--output-format json\` wrapper**: The CLI wraps responses in a JSON envelope \`{ "type": "result", "result": "<text>", ... }\`. You must parse this wrapper first and extract the \`result\` field, then search for the review JSON within that text.
+- **Do NOT use the output name \`result\` in \`actions/github-script\` steps**: The \`result\` output is reserved by \`actions/github-script\` for the script return value and will be silently overwritten. Use a different name like \`review-json\`.
 - **Use \`always()\` in the post-comment step condition**: Add \`always()\` to ensure the PR comment is posted even if the review step fails (e.g., \`if: always() && <other conditions>\`).
 
 ## Quality Requirements
