@@ -39,6 +39,10 @@ vi.mock('../../src/ui/logger.js', () => ({
   },
 }));
 
+vi.mock('../../src/ui/banner.js', () => ({
+  printBanner: vi.fn(),
+}));
+
 vi.mock('../../src/ui/spinner.js', () => ({
   withSpinner: vi.fn((_text: string, fn: () => Promise<unknown>) => fn()),
 }));

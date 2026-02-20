@@ -7,6 +7,7 @@ import chalk from 'chalk';
 import { search } from '@inquirer/prompts';
 
 import { logger } from '../ui/logger.js';
+import { printBanner } from '../ui/banner.js';
 import { withSpinner } from '../ui/spinner.js';
 import { confirmPrompt, selectPrompt, inputPrompt } from '../ui/prompts.js';
 import { isGitRepo, getRepoRoot, hasUncommittedChanges } from '../utils/git.js';
@@ -242,15 +243,26 @@ export async function replCommand(): Promise<void> {
   const store = new PromptStore(repoRoot);
   await store.ensureDefaults();
 
-  logger.header('CodeFactory');
+  printBanner();
 
   const allCommands = buildCommandChoices(store.list());
+
+  const ACCENT = '#FF8C00';
 
   // Main loop
   while (true) {
     try {
       const action = await search<ReplAction>({
-        message: '>',
+        message: ' ',
+        theme: {
+          prefix: chalk.bold.hex(ACCENT)('❯'),
+          style: {
+            highlight: (text: string) => chalk.bold(text),
+            description: (text: string) => chalk.dim(text),
+            message: () => '',
+          },
+          helpMode: 'auto' as const,
+        },
         source: async (term) => {
           const input = term ?? '';
 
