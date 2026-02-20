@@ -88,6 +88,16 @@ describe('buildAgentSystemPrompt', () => {
     expect(result).toContain('Execution Strategy');
   });
 
+  it('should include agent-pr label in gh pr create command', async () => {
+    const result = await buildAgentSystemPrompt({
+      branchName: 'cf/test',
+      repoRoot: tempDir,
+      harnessCommands: null,
+    });
+
+    expect(result).toContain('--label "agent-pr"');
+  });
+
   it('should replace all occurrences of branchName', async () => {
     const result = await buildAgentSystemPrompt({
       branchName: 'cf/multi-replace',
