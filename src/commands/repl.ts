@@ -4,12 +4,13 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import chalk from 'chalk';
-import { search } from '@inquirer/prompts';
+import { z } from 'zod';
 
 import { logger } from '../ui/logger.js';
 import { printBanner } from '../ui/banner.js';
 import { withSpinner } from '../ui/spinner.js';
 import { confirmPrompt, selectPrompt, inputPrompt } from '../ui/prompts.js';
+import { borderedInput } from '../ui/bordered-input.js';
 import { isGitRepo, getRepoRoot, hasUncommittedChanges } from '../utils/git.js';
 import { readFileIfExists } from '../utils/fs.js';
 import { NotAGitRepoError, ClaudeNotFoundError } from '../utils/errors.js';
@@ -25,11 +26,24 @@ type ReplAction =
   | { type: 'command'; name: string }
   | { type: 'task'; task: string };
 
-interface PackageScripts {
-  test?: string;
-  build?: string;
-  lint?: string;
-  typecheck?: string;
+const packageJsonSchema = z.object({
+  scripts: z
+    .object({
+      test: z.string().optional(),
+      build: z.string().optional(),
+      lint: z.string().optional(),
+      typecheck: z.string().optional(),
+    })
+    .optional(),
+});
+
+/**
+ * Escape a string for safe embedding in a single-quoted bash string.
+ * Wraps the value in single quotes, escaping any embedded single quotes
+ * so that command substitution ($(), backticks) cannot fire.
+ */
+function shellEscape(s: string): string {
+  return "'" + s.replace(/'/g, "'\\''") + "'";
 }
 
 async function extractHarnessCommands(
@@ -39,8 +53,9 @@ async function extractHarnessCommands(
   if (!raw) return null;
 
   try {
-    const pkg = JSON.parse(raw) as { scripts?: PackageScripts };
-    const s = pkg.scripts;
+    const parsed = packageJsonSchema.safeParse(JSON.parse(raw));
+    if (!parsed.success) return null;
+    const s = parsed.data.scripts;
     if (!s) return null;
 
     return {
@@ -190,8 +205,8 @@ async function handleTask(task: string, repoRoot: string, store: PromptStore): P
   const harnessCommands = await extractHarnessCommands(worktree.path);
   const qualityGates = buildQualityGates(harnessCommands);
   const systemPrompt = template
-    .replace(/\{\{branchName\}\}/g, branchName.trim())
-    .replace(/\{\{qualityGates\}\}/g, qualityGates);
+    .replace(/\{\{branchName\}\}/g, () => branchName.trim())
+    .replace(/\{\{qualityGates\}\}/g, () => qualityGates);
 
   // Write launcher files to worktree
   const cfDir = join(worktree.path, '.codefactory');
@@ -206,8 +221,8 @@ async function handleTask(task: string, repoRoot: string, store: PromptStore): P
     launcherFile,
     [
       '#!/bin/bash',
-      `PROMPT=$(<"${promptFile}")`,
-      `TASK=$(<"${taskFile}")`,
+      `PROMPT=$(<${shellEscape(promptFile)})`,
+      `TASK=$(<${shellEscape(taskFile)})`,
       'exec claude --dangerously-skip-permissions --append-system-prompt "$PROMPT" "$TASK"',
       '',
     ].join('\n'),
@@ -215,7 +230,7 @@ async function handleTask(task: string, repoRoot: string, store: PromptStore): P
   );
   await chmod(launcherFile, 0o755);
 
-  await openInNewTerminal(`bash "${launcherFile}"`, worktree.path);
+  await openInNewTerminal(`bash ${shellEscape(launcherFile)}`, worktree.path);
 
   console.log();
   logger.success('Claude opened in new terminal.');
@@ -252,55 +267,45 @@ export async function replCommand(): Promise<void> {
   // Main loop
   while (true) {
     try {
-      const action = await search<ReplAction>({
-        message: ' ',
-        theme: {
-          prefix: chalk.bold.hex(ACCENT)('❯'),
-          style: {
-            highlight: (text: string) => chalk.bold(text),
-            description: (text: string) => chalk.dim(text),
-            message: () => '',
-          },
-          helpMode: 'auto' as const,
-        },
-        source: async (term) => {
-          const input = term ?? '';
-
-          // Empty or just "/" — show all commands
-          if (input === '' || input === '/') {
-            return allCommands;
-          }
-
-          // Starts with "/" — filter commands
-          if (input.startsWith('/')) {
-            const filter = input.slice(1).toLowerCase();
-            return allCommands.filter((c) => c.name.slice(1).toLowerCase().includes(filter));
-          }
-
-          // Anything else — treat as a task
-          return [
-            {
-              name: `"${input}"`,
-              value: { type: 'task' as const, task: input },
-              description: 'Create worktree and launch Claude',
-            },
-          ];
-        },
+      const raw = await borderedInput({
+        hint: 'Type a task, or /command for saved prompts',
+        accentColor: ACCENT,
       });
 
-      if (action.type === 'prompt') {
-        await promptActions(store, action.name);
-      } else if (action.type === 'command') {
-        if (action.name === 'init') {
-          const { initCommand } = await import('./init.js');
-          await initCommand({});
-        } else if (action.name === 'help') {
-          showHelp();
-        } else if (action.name === 'exit') {
-          process.exit(0);
+      if (!raw) continue;
+
+      if (raw.startsWith('/')) {
+        // Filter commands by what was typed after "/"
+        const filter = raw.slice(1).toLowerCase();
+        const filtered = filter
+          ? allCommands.filter((c) => c.name.slice(1).toLowerCase().includes(filter))
+          : allCommands;
+
+        if (filtered.length === 0) {
+          logger.warn(`No command found for "${raw}"`);
+          console.log();
+          continue;
         }
-      } else if (action.type === 'task') {
-        await handleTask(action.task, repoRoot, store);
+
+        const action = await selectPrompt<ReplAction>(
+          'Select command:',
+          filtered.map((c) => ({ name: c.name, value: c.value })),
+        );
+
+        if (action.type === 'prompt') {
+          await promptActions(store, action.name);
+        } else if (action.type === 'command') {
+          if (action.name === 'init') {
+            const { initCommand } = await import('./init.js');
+            await initCommand({});
+          } else if (action.name === 'help') {
+            showHelp();
+          } else if (action.name === 'exit') {
+            process.exit(0);
+          }
+        }
+      } else {
+        await handleTask(raw, repoRoot, store);
       }
 
       console.log();
