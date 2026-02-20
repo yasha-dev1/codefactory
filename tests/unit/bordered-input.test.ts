@@ -6,6 +6,7 @@ import type { SlashCommand, BorderedInputConfig } from '../../src/ui/bordered-in
 const mockCtx = vi.hoisted(() => ({
   value: '' as string,
   selectedIndex: 0,
+  lastEscRef: { current: 0 },
   keypressHandler: null as
     | ((key: Record<string, unknown>, rl: Record<string, unknown>) => void)
     | null,
@@ -41,6 +42,8 @@ vi.mock('@inquirer/core', () => {
         },
       ];
     },
+
+    useRef: <T>(_initial: T) => mockCtx.lastEscRef,
 
     useKeypress: (handler: (key: Record<string, unknown>, rl: Record<string, unknown>) => void) => {
       mockCtx.keypressHandler = handler;
@@ -213,5 +216,102 @@ describe('bordered-input Enter key behavior', () => {
 
     const result = await promise;
     expect(result).toBe('/something');
+  });
+});
+
+describe('bordered-input double-ESC clear behavior', () => {
+  beforeEach(() => {
+    mockCtx.value = '';
+    mockCtx.selectedIndex = 0;
+    mockCtx.lastEscRef.current = 0;
+    mockCtx.keypressHandler = null;
+  });
+
+  it('should clear textarea on double-ESC within 500ms', () => {
+    mockCtx.value = 'hello world';
+
+    borderedInput({ hint: 'test' });
+    const write = vi.fn();
+    const rl = { line: 'hello world', write };
+
+    // Simulate first ESC — records timestamp
+    const now = Date.now();
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    mockCtx.keypressHandler!({ name: 'escape' }, rl);
+    expect(mockCtx.lastEscRef.current).toBe(now);
+    expect(mockCtx.value).toBe('hello world');
+
+    // Simulate second ESC within 500ms — clears input
+    vi.spyOn(Date, 'now').mockReturnValue(now + 200);
+    mockCtx.keypressHandler!({ name: 'escape' }, rl);
+    expect(mockCtx.value).toBe('');
+    expect(write).toHaveBeenCalledWith('\x15');
+    expect(mockCtx.lastEscRef.current).toBe(0);
+
+    vi.restoreAllMocks();
+  });
+
+  it('should not clear textarea on single ESC', () => {
+    mockCtx.value = 'hello';
+
+    borderedInput({ hint: 'test' });
+    const write = vi.fn();
+    const rl = { line: 'hello', write };
+
+    const now = Date.now();
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    mockCtx.keypressHandler!({ name: 'escape' }, rl);
+
+    expect(mockCtx.value).toBe('hello');
+    expect(write).not.toHaveBeenCalled();
+    expect(mockCtx.lastEscRef.current).toBe(now);
+
+    vi.restoreAllMocks();
+  });
+
+  it('should not clear if second ESC comes after 500ms', () => {
+    mockCtx.value = 'some text';
+
+    borderedInput({ hint: 'test' });
+    const write = vi.fn();
+    const rl = { line: 'some text', write };
+
+    const now = Date.now();
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    mockCtx.keypressHandler!({ name: 'escape' }, rl);
+
+    // Second ESC after 600ms — too late, just updates timestamp
+    vi.spyOn(Date, 'now').mockReturnValue(now + 600);
+    mockCtx.keypressHandler!({ name: 'escape' }, rl);
+
+    expect(mockCtx.value).toBe('some text');
+    expect(write).not.toHaveBeenCalled();
+    expect(mockCtx.lastEscRef.current).toBe(now + 600);
+
+    vi.restoreAllMocks();
+  });
+
+  it('should reset selectedIndex when clearing', () => {
+    mockCtx.value = '/he';
+    mockCtx.selectedIndex = 2;
+
+    borderedInput({
+      hint: 'test',
+      commands: [{ name: 'help' }, { name: 'hello' }, { name: 'hey' }],
+    });
+    const write = vi.fn();
+    const rl = { line: '/he', write };
+
+    const now = Date.now();
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    mockCtx.keypressHandler!({ name: 'escape' }, rl);
+
+    vi.spyOn(Date, 'now').mockReturnValue(now + 100);
+    mockCtx.keypressHandler!({ name: 'escape' }, rl);
+
+    expect(mockCtx.value).toBe('');
+    expect(mockCtx.selectedIndex).toBe(0);
+
+    vi.restoreAllMocks();
   });
 });
