@@ -213,6 +213,16 @@
       ]
     },
     {
+      "name": "issue-planner",
+      "enabled": true,
+      "generatedAt": "2026-02-20T00:00:00.000Z",
+      "files": [
+        "/home/yasha/Desktop/projects/codefactory/.github/workflows/issue-planner.yml",
+        "/home/yasha/Desktop/projects/codefactory/scripts/issue-planner-guard.ts",
+        "/home/yasha/Desktop/projects/codefactory/.codefactory/prompts/issue-planner.md"
+      ]
+    },
+    {
       "name": "issue-implementer",
       "enabled": true,
       "generatedAt": "2026-02-20T00:00:00.000Z",

@@ -107,7 +107,7 @@ When triggered via \`workflow_dispatch\`:
    - Invoke Claude Code using \`anthropics/claude-code-action@v1\` with \`claude_code_oauth_token: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\` (NOT \`ANTHROPIC_API_KEY\`)
    - Pass the built prompt via the action's \`prompt\` input
    - The agent reads CLAUDE.md and harness.config.json for project conventions
-   - Set \`--max-turns 100\` in \`claude_args\`
+   - Set \`--max-turns 100 --allowedTools "Edit,Write,Read,Glob,Grep,Bash"\` in \`claude_args\` (claude-code-action does NOT enable write tools by default — without \`--allowedTools\`, all Edit/Write/Bash calls will be permission-denied)
    - Set a timeout of ${prefs.strictnessLevel === 'strict' ? '30' : prefs.strictnessLevel === 'standard' ? '45' : '60'} minutes
 
 7. **Post-implementation checks**:

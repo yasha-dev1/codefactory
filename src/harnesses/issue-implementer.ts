@@ -6,7 +6,7 @@ export const issueImplementerHarness: HarnessModule = {
   name: 'issue-implementer',
   displayName: 'Issue Implementer Agent',
   description: 'Generates a workflow that spawns an AI agent to implement new issues automatically',
-  order: 15,
+  order: 16,
 
   isApplicable(): boolean {
     return true;

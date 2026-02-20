@@ -45,7 +45,14 @@ interface IssuePayload {
 const BOT_SUFFIXES = ['[bot]', '-bot'];
 
 /** Labels that indicate an issue has already been triaged. */
-const TRIAGED_LABELS = ['agent:implement', 'needs-human-review', 'wontfix', 'duplicate', 'invalid'];
+const TRIAGED_LABELS = [
+  'agent:plan',
+  'agent:implement',
+  'needs-human-review',
+  'wontfix',
+  'duplicate',
+  'invalid',
+];
 
 /** Label that enables re-triage on edit. */
 const RETRIAGE_LABEL = 'needs-more-info';
@@ -215,6 +222,7 @@ if (process.argv.includes('--self-test')) {
   );
 
   // --- isAlreadyTriaged ---
+  console.assert(isAlreadyTriaged(['agent:plan']) === true, 'agent:plan should indicate triaged');
   console.assert(
     isAlreadyTriaged(['agent:implement']) === true,
     'agent:implement should indicate triaged',

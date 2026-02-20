@@ -1,10 +1,10 @@
-import { issueImplementerHarness } from '../../../src/harnesses/issue-implementer.js';
+import { issuePlannerHarness } from '../../../src/harnesses/issue-planner.js';
 import type { HarnessContext } from '../../../src/harnesses/types.js';
 import type { ClaudeRunner } from '../../../src/core/claude-runner.js';
 import type { DetectionResult } from '../../../src/core/detector.js';
 
-vi.mock('../../../src/prompts/issue-implementer.js', () => ({
-  buildIssueImplementerPrompt: vi.fn().mockReturnValue('mocked issue implementer prompt'),
+vi.mock('../../../src/prompts/issue-planner.js', () => ({
+  buildIssuePlannerPrompt: vi.fn().mockReturnValue('mocked issue planner prompt'),
 }));
 
 vi.mock('../../../src/prompts/system.js', () => ({
@@ -39,9 +39,8 @@ function createMockContext(overrides?: Partial<HarnessContext>): HarnessContext 
     runner: {
       generate: vi.fn<ClaudeRunner['generate']>().mockResolvedValue({
         filesCreated: [
-          '/tmp/test-repo/.github/workflows/issue-implementer.yml',
-          '/tmp/test-repo/scripts/issue-implementer-prompt.md',
-          '/tmp/test-repo/scripts/issue-implementer-guard.ts',
+          '/tmp/test-repo/.github/workflows/issue-planner.yml',
+          '/tmp/test-repo/scripts/issue-planner-guard.ts',
         ],
         filesModified: [],
       }),
@@ -51,69 +50,68 @@ function createMockContext(overrides?: Partial<HarnessContext>): HarnessContext 
     userPreferences: {
       ciProvider: 'github-actions',
       strictnessLevel: 'standard',
-      selectedHarnesses: ['issue-implementer'],
+      selectedHarnesses: ['issue-planner'],
     },
     previousOutputs: new Map(),
     ...overrides,
   };
 }
 
-describe('issueImplementerHarness', () => {
+describe('issuePlannerHarness', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   it('should have correct metadata', () => {
-    expect(issueImplementerHarness.name).toBe('issue-implementer');
-    expect(issueImplementerHarness.displayName).toBe('Issue Implementer Agent');
-    expect(issueImplementerHarness.order).toBe(16);
+    expect(issuePlannerHarness.name).toBe('issue-planner');
+    expect(issuePlannerHarness.displayName).toBe('Issue Planner Agent');
+    expect(issuePlannerHarness.order).toBe(15);
   });
 
   it('isApplicable should return true', () => {
     const ctx = createMockContext();
-    expect(issueImplementerHarness.isApplicable(ctx)).toBe(true);
+    expect(issuePlannerHarness.isApplicable(ctx)).toBe(true);
   });
 
   it('should call runner.generate with the prompt', async () => {
     const ctx = createMockContext();
-    await issueImplementerHarness.execute(ctx);
+    await issuePlannerHarness.execute(ctx);
 
     expect(ctx.runner.generate).toHaveBeenCalledOnce();
     expect(ctx.runner.generate).toHaveBeenCalledWith(
-      'mocked issue implementer prompt',
+      'mocked issue planner prompt',
       'mocked system prompt',
     );
   });
 
   it('should return correct output with filesCreated', async () => {
     const ctx = createMockContext();
-    const output = await issueImplementerHarness.execute(ctx);
+    const output = await issuePlannerHarness.execute(ctx);
 
-    expect(output.harnessName).toBe('issue-implementer');
-    expect(output.filesCreated).toContain('/tmp/test-repo/.github/workflows/issue-implementer.yml');
-    expect(output.filesCreated).toContain('/tmp/test-repo/scripts/issue-implementer-prompt.md');
-    expect(output.filesCreated).toContain('/tmp/test-repo/scripts/issue-implementer-guard.ts');
+    expect(output.harnessName).toBe('issue-planner');
+    expect(output.filesCreated).toContain('/tmp/test-repo/.github/workflows/issue-planner.yml');
+    expect(output.filesCreated).toContain('/tmp/test-repo/scripts/issue-planner-guard.ts');
   });
 
   it('should store output in previousOutputs map', async () => {
     const ctx = createMockContext();
-    await issueImplementerHarness.execute(ctx);
+    await issuePlannerHarness.execute(ctx);
 
-    expect(ctx.previousOutputs.has('issue-implementer')).toBe(true);
-    const stored = ctx.previousOutputs.get('issue-implementer');
-    expect(stored?.harnessName).toBe('issue-implementer');
+    expect(ctx.previousOutputs.has('issue-planner')).toBe(true);
+    const stored = ctx.previousOutputs.get('issue-planner');
+    expect(stored?.harnessName).toBe('issue-planner');
   });
 
   it('should include metadata with targetFiles', async () => {
     const ctx = createMockContext();
-    const output = await issueImplementerHarness.execute(ctx);
+    const output = await issuePlannerHarness.execute(ctx);
 
     expect(output.metadata).toBeDefined();
     expect(output.metadata?.targetFiles).toEqual([
-      '.github/workflows/issue-implementer.yml',
-      'scripts/issue-implementer-guard.ts',
+      '.github/workflows/issue-planner.yml',
+      'scripts/issue-planner-guard.ts',
     ]);
-    expect(output.metadata?.promptFile).toBe('.codefactory/prompts/issue-implementer.md');
+    expect(output.metadata?.promptFile).toBe('.codefactory/prompts/issue-planner.md');
   });
 
   it('should wrap errors with descriptive message', async () => {
@@ -124,8 +122,8 @@ describe('issueImplementerHarness', () => {
       } as unknown as ClaudeRunner,
     });
 
-    await expect(issueImplementerHarness.execute(ctx)).rejects.toThrow(
-      'Issue implementer generation failed: Claude API timeout',
+    await expect(issuePlannerHarness.execute(ctx)).rejects.toThrow(
+      'Issue planner generation failed: Claude API timeout',
     );
   });
 
@@ -137,8 +135,8 @@ describe('issueImplementerHarness', () => {
       } as unknown as ClaudeRunner,
     });
 
-    await expect(issueImplementerHarness.execute(ctx)).rejects.toThrow(
-      'Issue implementer generation failed: network failure',
+    await expect(issuePlannerHarness.execute(ctx)).rejects.toThrow(
+      'Issue planner generation failed: network failure',
     );
   });
 });

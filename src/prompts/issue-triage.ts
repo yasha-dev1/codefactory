@@ -4,7 +4,7 @@ import type { DetectionResult, UserPreferences } from './types.js';
  * Prompt for generating the issue-triage agent workflow and supporting scripts.
  */
 export function buildIssueTriagePrompt(detection: DetectionResult, prefs: UserPreferences): string {
-  return `Generate an issue-triage agent system for this ${detection.primaryLanguage} project. When a new issue is opened or edited, the system evaluates it for quality and completeness, then routes actionable issues to the implementation pipeline by adding the \`agent:implement\` label.
+  return `Generate an issue-triage agent system for this ${detection.primaryLanguage} project. When a new issue is opened or edited, the system evaluates it for quality and completeness, then routes actionable issues to the planning pipeline by adding the \`agent:plan\` label.
 
 ## Detected Stack Context
 
@@ -53,7 +53,7 @@ The workflow runs on every issue open, edit, and reopen event. The guard script 
 
 1. **Gate check** (via guard script):
    - Skip if the issue author is a bot (check \`github.actor\` ends with \`[bot]\` or is in known bot list, or user type is \`Bot\`)
-   - Skip if the issue already has any triage result label (\`agent:implement\`, \`needs-human-review\`, \`wontfix\`, \`duplicate\`, \`invalid\`)
+   - Skip if the issue already has any triage result label (\`agent:plan\`, \`agent:implement\`, \`needs-human-review\`, \`wontfix\`, \`duplicate\`, \`invalid\`)
    - Skip if the event is actually a pull request (issues API can include PRs)
    - On \`edited\` events: only re-triage if the issue currently has \`needs-more-info\` label (author updated after feedback)
    - On \`edited\` events: if the issue was never triaged (no triage labels at all), proceed with initial triage (handles issues that predate the workflow)
@@ -62,6 +62,7 @@ The workflow runs on every issue open, edit, and reopen event. The guard script 
 2. **Label setup**:
    - Ensure these labels exist in the repo (create if missing):
      - \`needs-more-info\` (color: \`FBCA04\`) — issue lacks required details
+     - \`agent:plan\` (color: \`1D76DB\`) — issue is ready for planning agent
      - \`agent:implement\` (color: \`0E8A16\`) — issue is ready for implementation agent
      - \`triage:failed\` (color: \`D93F0B\`) — triage process errored
      - \`needs-human-review\` (color: \`C5DEF5\`) — issue needs manual assessment
@@ -98,9 +99,9 @@ The workflow runs on every issue open, edit, and reopen event. The guard script 
 
 5. **Decision routing**:
    - If \`actionable === true\` AND \`confidence >= ${prefs.strictnessLevel === 'strict' ? '0.8' : prefs.strictnessLevel === 'standard' ? '0.7' : '0.6'}\`:
-     - Add the \`agent:implement\` label
+     - Add the \`agent:plan\` label
      - Add any \`suggestedLabels\` that exist in the repo
-     - Post a comment: "Triage complete — this issue is actionable and has been queued for implementation."
+     - Post a comment: "Triage complete — this issue is actionable and has been queued for planning."
    - If \`actionable === false\` OR confidence is below threshold:
      - Add the \`needs-more-info\` label
      - Post a comment with specific missing information from the verdict's \`missingInfo\` array
@@ -111,14 +112,14 @@ The workflow runs on every issue open, edit, and reopen event. The guard script 
      - Add \`triage:failed\` label
      - Post comment indicating parse failure with raw output for debugging
 
-6. **Dispatch implementer workflow** (CRITICAL — GitHub Actions event chaining):
+6. **Dispatch planner workflow** (CRITICAL — GitHub Actions event chaining):
    - **IMPORTANT**: Labels added by \`GITHUB_TOKEN\` within a workflow do NOT trigger \`labeled\` events on other workflows. This is a GitHub security measure to prevent infinite loops.
-   - After adding \`agent:implement\` label, the triage workflow MUST explicitly dispatch the implementer workflow using:
+   - After adding \`agent:plan\` label, the triage workflow MUST explicitly dispatch the planner workflow using:
      \`\`\`bash
-     gh workflow run issue-implementer.yml --field issue_number="<issue-number>"
+     gh workflow run issue-planner.yml --field issue_number="<issue-number>"
      \`\`\`
    - This requires the \`actions: write\` permission (already listed above)
-   - Only dispatch when \`agent:implement\` was actually added in this run
+   - Only dispatch when \`agent:plan\` was actually added in this run
 
 7. **Failure handling**:
    - If the triage agent crashes or times out:
@@ -180,7 +181,7 @@ The script:
 - Exports public functions: \`isBot()\`, \`isAlreadyTriaged()\`, \`shouldRetriage()\`, \`evaluate()\`
 - Supports \`--evaluate\` CLI mode (outputs JSON decision) and \`--self-test\` mode (runs built-in assertions)
 - Bot detection: checks for \`[bot]\` and \`-bot\` suffixes in login, and \`Bot\` user type
-- Triaged labels: \`agent:implement\`, \`needs-human-review\`, \`wontfix\`, \`duplicate\`, \`invalid\`
+- Triaged labels: \`agent:plan\`, \`agent:implement\`, \`needs-human-review\`, \`wontfix\`, \`duplicate\`, \`invalid\`
 - Re-triage label: \`needs-more-info\`
 - Edit event logic:
   1. If \`needs-more-info\` label present → re-triage (isRetriage=true)

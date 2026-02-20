@@ -66,6 +66,7 @@ jobs:
           script: |
             const labels = [
               { name: 'needs-more-info', color: 'FBCA04', description: 'Issue needs additional details' },
+              { name: 'agent:plan', color: '1D76DB', description: 'Approved for automated planning' },
               { name: 'agent:implement', color: '0E8A16', description: 'Approved for automated implementation' },
               { name: 'triage:failed', color: 'D93F0B', description: 'Triage agent encountered an error' },
               { name: 'needs-human-review', color: 'C5DEF5', description: 'Requires human review before proceeding' },
@@ -165,7 +166,7 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: ${{ steps.build-prompt.outputs.prompt }}
-          claude_args: "--model claude-opus-4-6 --max-turns 15 --json-schema '${{ steps.schema.outputs.value }}'"
+          claude_args: "--max-turns 15 --json-schema '${{ steps.schema.outputs.value }}'"
 
       - name: Parse structured verdict
         if: steps.guard.outputs.should-triage == 'true'
@@ -290,7 +291,7 @@ jobs:
               "notes": "Brief description of what you observed"
             }
             ```
-          claude_args: '--model claude-opus-4-6 --max-turns 20'
+          claude_args: '--max-turns 20'
 
       - name: Parse reproduction result
         if: steps.reproduce.outcome == 'success'
@@ -437,7 +438,7 @@ jobs:
               }
 
               if (shouldImplement) {
-                labelsToAdd.push('agent:implement');
+                labelsToAdd.push('agent:plan');
               }
 
               if (complexity === 'high') {
@@ -488,8 +489,8 @@ jobs:
               core.info(`Added labels: ${labelsToAdd.join(', ')}`);
             }
 
-            // Signal implementer dispatch
-            core.setOutput('should-implement', String(labelsToAdd.includes('agent:implement')));
+            // Signal planner dispatch
+            core.setOutput('should-plan', String(labelsToAdd.includes('agent:plan')));
 
             // Post comment
             commentSections.push(
@@ -505,16 +506,16 @@ jobs:
               body: commentSections.join('\n'),
             });
 
-      - name: Dispatch implementer workflow
-        if: steps.route.outputs.should-implement == 'true'
+      - name: Dispatch planner workflow
+        if: steps.route.outputs.should-plan == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           ISSUE_NUM="${{ github.event.issue.number }}"
-          echo "Dispatching implementer for issue #${ISSUE_NUM}..."
-          gh workflow run issue-implementer.yml \
+          echo "Dispatching planner for issue #${ISSUE_NUM}..."
+          gh workflow run issue-planner.yml \
             --field issue_number="${ISSUE_NUM}"
-          echo "✔ Implementer workflow dispatched."
+          echo "✔ Planner workflow dispatched."
 
       - name: Failure handler
         if: failure() && steps.guard.outputs.should-triage == 'true'
