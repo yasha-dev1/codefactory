@@ -149,7 +149,7 @@ jobs:
             Changed files: ${{ steps.tier.outputs.changed-files }}
             Focus on: code correctness, security vulnerabilities, architectural boundary violations, and test coverage.
             Read the CLAUDE.md and harness.config.json for project conventions and architectural boundaries.
-          claude_args: '--max-turns 3'
+          claude_args: '--max-turns 10'
 
       - name: Post review marker
         if: steps.tier.outputs.tier != '1' && steps.dedup.outputs.skip != 'true'
