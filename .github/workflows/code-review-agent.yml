@@ -8,7 +8,7 @@ permissions:
   contents: read
   pull-requests: write
   checks: write
-  issues: read
+  issues: write
   id-token: write
 
 concurrency:
