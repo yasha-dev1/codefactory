@@ -2,7 +2,7 @@ name: Issue Implementer Agent
 
 on:
   issues:
-    types: [opened, labeled]
+    types: [labeled]
   workflow_dispatch:
     inputs:
       issue_number:
