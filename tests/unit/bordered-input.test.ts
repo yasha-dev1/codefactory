@@ -245,7 +245,7 @@ describe('bordered-input double-ESC clear behavior', () => {
     vi.spyOn(Date, 'now').mockReturnValue(now + 200);
     mockCtx.keypressHandler!({ name: 'escape' }, rl);
     expect(mockCtx.value).toBe('');
-    expect(write).toHaveBeenCalledWith('\x15');
+    expect(rl.line).toBe('');
     expect(mockCtx.lastEscRef.current).toBe(0);
 
     vi.restoreAllMocks();

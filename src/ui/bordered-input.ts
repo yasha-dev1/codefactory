@@ -47,7 +47,7 @@ const _borderedInput = createPrompt<string, BorderedInputConfig>((config, done) 
     if (key.name === 'escape') {
       const now = Date.now();
       if (lastEscRef.current > 0 && now - lastEscRef.current < DOUBLE_ESC_MS) {
-        rl.write('\x15');
+        rl.line = '';
         setValue('');
         setSelectedIndex(0);
         lastEscRef.current = 0;
@@ -82,10 +82,8 @@ const _borderedInput = createPrompt<string, BorderedInputConfig>((config, done) 
         const selected = filtered[selectedIndex];
         if (selected) {
           const newValue = `/${selected.name}`;
-          // Clear current line by sending backspaces, then write the new value.
-          // We use the underlying readline's key simulation by writing the
-          // control character for kill-line (\x15 = Ctrl+U) followed by the value.
-          rl.write('\x15');
+          // Replace readline buffer with the new value.
+          rl.line = '';
           rl.write(newValue);
           setValue(newValue);
           setSelectedIndex(0);
