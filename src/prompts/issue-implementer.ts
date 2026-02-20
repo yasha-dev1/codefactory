@@ -196,6 +196,12 @@ The script:
 - Derives the branch name: \`cf/<slug>-<number>\`, max 60 chars
 - Returns a JSON decision object with issueNumber and issueTitle (used by downstream steps)
 
+## Critical: No Plan Mode in CI
+
+The generated \`.codefactory/prompts/issue-implementer.md\` MUST instruct the agent to **never use plan mode** (\`EnterPlanMode\`/\`ExitPlanMode\`). The agent runs in CI with no human to approve plans. If it enters plan mode, it will stall and the workflow will produce zero file changes. The prompt must explicitly say: "Execute changes directly using Read, Write, Edit, and Bash tools. Do NOT call EnterPlanMode or ExitPlanMode."
+
+Similarly, the agent must NOT run git commands (commit, push) — the CI workflow handles all git operations after the agent finishes.
+
 ## Safety Constraints
 
 - The agent must NEVER modify CI workflow files, harness.config.json, CLAUDE.md, or lock files
