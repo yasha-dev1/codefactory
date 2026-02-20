@@ -76,7 +76,7 @@ You are on branch \`{{branchName}}\`. All commits go here.
 
 After all quality gates pass:
 1. Push the branch: \`git push -u origin {{branchName}}\`
-2. Create a PR: \`gh pr create --title "<short task summary>" --body "<summary of changes, files modified, test results>"\`
+2. Create a PR: \`gh pr create --label "agent-pr" --title "<short task summary>" --body "<summary of changes, files modified, test results>"\`
 3. Print the PR URL so the user can see it.`;
 
 function buildQualityGates(commands: AgentSystemPromptOptions['harnessCommands']): string {
