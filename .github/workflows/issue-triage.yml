@@ -2,7 +2,7 @@ name: Issue Triage Agent
 
 on:
   issues:
-    types: [opened, edited]
+    types: [opened, edited, reopened]
 
 permissions:
   issues: write

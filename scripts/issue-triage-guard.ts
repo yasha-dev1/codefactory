@@ -84,9 +84,11 @@ export function shouldRetriage(labels: string[], eventName: string): boolean {
  * Decision logic:
  * 1. Skip pull requests — they're not issues.
  * 2. Skip bot-authored issues.
- * 3. On edit: only re-triage if `needs-more-info` label is present.
- * 4. On open: skip if already triaged.
- * 5. Otherwise, proceed with triage.
+ * 3. On edit + `needs-more-info` → re-triage.
+ * 4. On edit + never triaged → initial triage (e.g. issue predates workflow).
+ * 5. On edit + already triaged → skip.
+ * 6. On open + already triaged → skip.
+ * 7. Otherwise, proceed with triage.
  */
 export function evaluate(issue: IssuePayload, eventName: string): TriageDecision {
   const labelNames = issue.labels.map((l) => l.name);
@@ -118,8 +120,12 @@ export function evaluate(issue: IssuePayload, eventName: string): TriageDecision
     };
   }
 
-  // Gate 3: Edit event — only re-triage if needs-more-info
+  // Gate 3: Already triaged
+  const alreadyTriaged = isAlreadyTriaged(labelNames);
+
+  // Gate 4: Edit event routing
   if (eventName === 'edited') {
+    // Re-triage: issue was triaged as needs-more-info, author updated it
     if (shouldRetriage(labelNames, eventName)) {
       return {
         ...base,
@@ -129,17 +135,28 @@ export function evaluate(issue: IssuePayload, eventName: string): TriageDecision
         skipReason: '',
       };
     }
+    // Never triaged: treat edit like an open event (e.g. issue created before workflow existed)
+    if (!alreadyTriaged) {
+      return {
+        ...base,
+        shouldTriage: true,
+        reason: 'Issue edited but never triaged — proceeding with initial triage.',
+        isRetriage: false,
+        skipReason: '',
+      };
+    }
+    // Already triaged with a final label — skip
     return {
       ...base,
       shouldTriage: false,
-      reason: `Edit event without '${RETRIAGE_LABEL}' label — skipping re-triage.`,
+      reason: 'Edit event on already-triaged issue — skipping.',
       isRetriage: false,
-      skipReason: 'edit_no_retriage_label',
+      skipReason: 'edit_already_triaged',
     };
   }
 
-  // Gate 4: Already triaged
-  if (isAlreadyTriaged(labelNames)) {
+  // Gate 5: Already triaged (open event)
+  if (alreadyTriaged) {
     return {
       ...base,
       shouldTriage: false,
@@ -303,8 +320,8 @@ if (process.argv.includes('--self-test')) {
   console.assert(retriageIssue.shouldTriage === true, 'Re-triage should proceed');
   console.assert(retriageIssue.isRetriage === true, 'Should be flagged as re-triage');
 
-  // Edit without needs-more-info → skip
-  const editNoRetriage = evaluate(
+  // Edit on never-triaged issue → initial triage (e.g. issue predates workflow)
+  const editNeverTriaged = evaluate(
     {
       number: 6,
       title: 'Feature',
@@ -314,10 +331,30 @@ if (process.argv.includes('--self-test')) {
     },
     'edited',
   );
-  console.assert(editNoRetriage.shouldTriage === false, 'Edit without needs-more-info should skip');
   console.assert(
-    editNoRetriage.skipReason === 'edit_no_retriage_label',
-    'Skip reason should be edit_no_retriage_label',
+    editNeverTriaged.shouldTriage === true,
+    'Edit on never-triaged issue should proceed with triage',
+  );
+  console.assert(editNeverTriaged.isRetriage === false, 'Should not be flagged as re-triage');
+
+  // Edit on already-triaged issue (without needs-more-info) → skip
+  const editAlreadyTriaged = evaluate(
+    {
+      number: 7,
+      title: 'Feature',
+      body: 'Updated',
+      user: { login: 'yasha-dev1' },
+      labels: [{ name: 'agent:implement' }],
+    },
+    'edited',
+  );
+  console.assert(
+    editAlreadyTriaged.shouldTriage === false,
+    'Edit on already-triaged issue should skip',
+  );
+  console.assert(
+    editAlreadyTriaged.skipReason === 'edit_already_triaged',
+    'Skip reason should be edit_already_triaged',
   );
 
   console.log('\n✔ All self-tests passed.');
