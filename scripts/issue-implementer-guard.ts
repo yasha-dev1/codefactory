@@ -32,6 +32,14 @@ export interface ImplementerDecision {
   blockedLabels: string[];
 }
 
+export interface ReviewFixDecision {
+  shouldFix: boolean;
+  prNumber: number;
+  branchName: string;
+  cycle: number;
+  reason: string;
+}
+
 interface IssuePayload {
   number: number;
   title: string;
@@ -196,25 +204,130 @@ export function evaluate(issue: IssuePayload, skipPRCheck = false): ImplementerD
   };
 }
 
+/**
+ * Evaluate whether a review-fix cycle should proceed for a given PR.
+ *
+ * Decision logic:
+ * 1. Cycle must be <= 3.
+ * 2. PR must exist and be OPEN.
+ * 3. Returns the PR branch name for checkout.
+ */
+export function evaluateReviewFix(
+  prNumber: number,
+  cycle: number,
+  skipBranchCheck = false,
+): ReviewFixDecision {
+  const MAX_CYCLES = 3;
+
+  const base: Pick<ReviewFixDecision, 'prNumber'> = { prNumber };
+
+  // Gate 1: Max cycles exceeded
+  if (cycle > MAX_CYCLES) {
+    return {
+      ...base,
+      shouldFix: false,
+      branchName: '',
+      cycle,
+      reason: `Max review-fix cycles exceeded (${cycle} > ${MAX_CYCLES}). Escalate to human.`,
+    };
+  }
+
+  // Gate 2: PR must be open (requires API call)
+  if (!skipBranchCheck) {
+    try {
+      const repo = process.env.GITHUB_REPOSITORY || '';
+      if (!repo) {
+        return {
+          ...base,
+          shouldFix: false,
+          branchName: '',
+          cycle,
+          reason: 'GITHUB_REPOSITORY not set.',
+        };
+      }
+
+      const output = execSync(`gh pr view ${prNumber} --repo "${repo}" --json headRefName,state`, {
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      const prData = JSON.parse(output);
+
+      if (prData.state !== 'OPEN') {
+        return {
+          ...base,
+          shouldFix: false,
+          branchName: '',
+          cycle,
+          reason: `PR #${prNumber} is ${prData.state}, not OPEN.`,
+        };
+      }
+
+      return {
+        ...base,
+        shouldFix: true,
+        branchName: prData.headRefName,
+        cycle,
+        reason: `Review-fix cycle ${cycle} approved for PR #${prNumber}. Branch: ${prData.headRefName}`,
+      };
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return {
+        ...base,
+        shouldFix: false,
+        branchName: '',
+        cycle,
+        reason: `Failed to fetch PR #${prNumber}: ${msg}`,
+      };
+    }
+  }
+
+  // Skip branch check mode (for testing)
+  return {
+    ...base,
+    shouldFix: true,
+    branchName: `cf/mock-branch-${prNumber}`,
+    cycle,
+    reason: `Review-fix cycle ${cycle} approved for PR #${prNumber} (branch check skipped).`,
+  };
+}
+
 // --- CLI: --evaluate ---
 
 if (process.argv.includes('--evaluate')) {
-  let issue: IssuePayload;
-  try {
-    issue = JSON.parse(process.env.ISSUE_JSON || '{}');
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    console.error(`ERROR: Failed to parse ISSUE_JSON: ${msg}`);
-    process.exit(1);
-  }
+  const prNumberEnv = process.env.PR_NUMBER;
+  const reviewFixCycleEnv = process.env.REVIEW_FIX_CYCLE;
 
-  if (!issue.number) {
-    console.error('ERROR: ISSUE_JSON must contain a valid issue number.');
-    process.exit(1);
-  }
+  if (prNumberEnv) {
+    // Review-fix mode
+    const prNum = parseInt(prNumberEnv, 10);
+    const cycle = parseInt(reviewFixCycleEnv || '1', 10);
 
-  const decision = evaluate(issue);
-  console.log(JSON.stringify(decision, null, 2));
+    if (isNaN(prNum) || prNum <= 0) {
+      console.error('ERROR: PR_NUMBER must be a valid positive integer.');
+      process.exit(1);
+    }
+
+    const decision = evaluateReviewFix(prNum, cycle);
+    console.log(JSON.stringify(decision, null, 2));
+  } else {
+    // Issue implementation mode
+    let issue: IssuePayload;
+    try {
+      issue = JSON.parse(process.env.ISSUE_JSON || '{}');
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      console.error(`ERROR: Failed to parse ISSUE_JSON: ${msg}`);
+      process.exit(1);
+    }
+
+    if (!issue.number) {
+      console.error('ERROR: ISSUE_JSON must contain a valid issue number.');
+      process.exit(1);
+    }
+
+    const decision = evaluate(issue);
+    console.log(JSON.stringify(decision, null, 2));
+  }
 }
 
 // --- CLI: --self-test ---
@@ -329,6 +442,30 @@ if (process.argv.includes('--self-test')) {
     multiBlocked.blockedLabels.length === 2,
     `Expected 2 blocked labels, got ${multiBlocked.blockedLabels.length}`,
   );
+
+  // --- evaluateReviewFix (skipBranchCheck=true) ---
+
+  // Normal cycle
+  const fixCycle1 = evaluateReviewFix(42, 1, true);
+  console.assert(fixCycle1.shouldFix === true, 'Cycle 1 should be approved');
+  console.assert(fixCycle1.prNumber === 42, `PR number should be 42, got ${fixCycle1.prNumber}`);
+  console.assert(fixCycle1.cycle === 1, `Cycle should be 1, got ${fixCycle1.cycle}`);
+
+  // Max cycle (3) should still be approved
+  const fixCycle3 = evaluateReviewFix(42, 3, true);
+  console.assert(fixCycle3.shouldFix === true, 'Cycle 3 should be approved');
+
+  // Exceeded max cycles
+  const fixCycle4 = evaluateReviewFix(42, 4, true);
+  console.assert(fixCycle4.shouldFix === false, 'Cycle 4 should be rejected (max exceeded)');
+  console.assert(
+    fixCycle4.reason.includes('Max review-fix cycles exceeded'),
+    `Reason should mention max cycles, got: ${fixCycle4.reason}`,
+  );
+
+  // Cycle 0 (edge case — should be approved)
+  const fixCycle0 = evaluateReviewFix(10, 0, true);
+  console.assert(fixCycle0.shouldFix === true, 'Cycle 0 should be approved');
 
   console.log('\n✔ All self-tests passed.');
 }

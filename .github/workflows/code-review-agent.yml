@@ -9,6 +9,7 @@ permissions:
   pull-requests: write
   checks: write
   issues: write
+  actions: write
   id-token: write
 
 concurrency:
@@ -137,6 +138,65 @@ jobs:
             core.setOutput('check-run-id', checkRun.id);
             core.info(`Created check run ${checkRun.id} for SHA ${headSha.slice(0, 12)}`);
 
+      - name: Read review prompt
+        if: steps.tier.outputs.tier != '1' && steps.dedup.outputs.skip != 'true'
+        id: prompt-file
+        run: |
+          if [[ -f "scripts/review-prompt.md" ]]; then
+            {
+              echo "content<<PROMPT_EOF"
+              cat scripts/review-prompt.md
+              echo "PROMPT_EOF"
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "content=Review this pull request for bugs, security issues, and architectural violations." >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build review prompt
+        if: steps.tier.outputs.tier != '1' && steps.dedup.outputs.skip != 'true'
+        id: build-prompt
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          REVIEW_TEMPLATE: ${{ steps.prompt-file.outputs.content }}
+          TIER: ${{ steps.tier.outputs.tier }}
+          CHANGED_FILES: ${{ steps.tier.outputs.changed-files }}
+        with:
+          script: |
+            const fs = require('fs');
+            const template = process.env.REVIEW_TEMPLATE || '';
+            const tier = process.env.TIER || '2';
+            const changedFiles = process.env.CHANGED_FILES || '';
+
+            let conventions = '';
+            try { conventions = fs.readFileSync('CLAUDE.md', 'utf-8').slice(0, 6000); } catch {}
+
+            let config = '';
+            try { config = fs.readFileSync('harness.config.json', 'utf-8'); } catch {}
+
+            const sections = [
+              template,
+              '',
+              '## PR Context',
+              '',
+              `**Risk Tier**: Tier ${tier}`,
+              `**Changed Files**:`,
+              changedFiles ? changedFiles.split('\n').map(f => `- ${f}`).join('\n') : '*(none detected)*',
+              '',
+              '## Project Conventions (from CLAUDE.md)',
+              '',
+              conventions || 'No CLAUDE.md found.',
+              '',
+              '## Harness Configuration',
+              '',
+              '```json',
+              config || '{}',
+              '```',
+            ];
+
+            const prompt = sections.join('\n');
+            core.setOutput('prompt', prompt);
+            core.info(`Review prompt built (${prompt.length} chars)`);
+
       - name: Run Claude review
         if: steps.tier.outputs.tier != '1' && steps.dedup.outputs.skip != 'true'
         id: review
@@ -149,12 +209,7 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          prompt: |
-            Review this pull request for bugs, security issues, and architectural violations.
-            This is a Tier ${{ steps.tier.outputs.tier }} change.
-            Changed files: ${{ steps.tier.outputs.changed-files }}
-            Focus on: code correctness, security vulnerabilities, architectural boundary violations, and test coverage.
-            Read the CLAUDE.md and harness.config.json for project conventions and architectural boundaries.
+          prompt: ${{ steps.build-prompt.outputs.prompt }}
           claude_args: '--max-turns 100 --allowedTools "Read,Glob,Grep,Bash"'
           allowed_bots: 'github-actions,implementer-bot'
 
@@ -203,6 +258,37 @@ jobs:
             echo "✔ Extracted review ($(echo "$REVIEW_TEXT" | wc -c) chars)"
           fi
 
+      - name: Parse verdict from review
+        if: steps.tier.outputs.tier != '1' && steps.dedup.outputs.skip != 'true'
+        id: verdict
+        env:
+          REVIEW_TEXT: ${{ steps.extract.outputs.review || '' }}
+          REVIEW_FOUND: ${{ steps.extract.outputs.found || 'false' }}
+        run: |
+          REVIEW_TEXT="${REVIEW_TEXT}"
+          if [[ "$REVIEW_FOUND" != "true" || -z "$REVIEW_TEXT" ]]; then
+            echo "verdict=COMMENT" >> "$GITHUB_OUTPUT"
+            echo "Verdict: COMMENT (no review text)"
+            exit 0
+          fi
+
+          # Try JSON parse first — review-prompt.md requests JSON output
+          VERDICT=$(echo "$REVIEW_TEXT" | jq -r '.verdict // empty' 2>/dev/null || echo "")
+
+          # Fallback: regex scan for VERDICT: line or **Verdict**: line
+          if [[ -z "$VERDICT" ]]; then
+            VERDICT=$(echo "$REVIEW_TEXT" | grep -oP '(?i)\*?\*?verdict\*?\*?\s*:?\s*(APPROVE|REQUEST_CHANGES|COMMENT)' | head -1 | grep -oP '(APPROVE|REQUEST_CHANGES|COMMENT)' || echo "")
+          fi
+
+          # Default to COMMENT if extraction failed (safe — no automated action)
+          if [[ -z "$VERDICT" ]]; then
+            VERDICT="COMMENT"
+            echo "::notice::Could not extract verdict from review — defaulting to COMMENT."
+          fi
+
+          echo "verdict=${VERDICT}" >> "$GITHUB_OUTPUT"
+          echo "Verdict: ${VERDICT}"
+
       - name: Post review marker
         if: steps.tier.outputs.tier != '1' && steps.dedup.outputs.skip != 'true'
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
@@ -210,21 +296,28 @@ jobs:
           REVIEW_TEXT: ${{ steps.extract.outputs.review || '' }}
           REVIEW_FOUND: ${{ steps.extract.outputs.found || 'false' }}
           REVIEW_OUTCOME: ${{ steps.review.outcome }}
+          VERDICT: ${{ steps.verdict.outputs.verdict || 'COMMENT' }}
         with:
           script: |
             const headSha = context.payload.pull_request.head.sha;
             const marker = `<!-- harness-review: ${headSha} -->`;
+            const verdictMarker = `<!-- review-verdict: ${process.env.VERDICT} -->`;
             const tier = '${{ steps.tier.outputs.tier }}';
             const reviewText = process.env.REVIEW_TEXT || '';
             const reviewFound = process.env.REVIEW_FOUND === 'true';
             const reviewOutcome = process.env.REVIEW_OUTCOME || 'failure';
+            const verdict = process.env.VERDICT || 'COMMENT';
+
+            const verdictEmoji = verdict === 'APPROVE' ? '✅' : verdict === 'REQUEST_CHANGES' ? '🔄' : '💬';
 
             const sections = [
               marker,
+              verdictMarker,
               `## 🔍 Code Review Agent — Tier ${tier}`,
               '',
               `**Commit**: \`${headSha.slice(0, 12)}\``,
               `**Status**: ${reviewOutcome === 'success' ? '✅ Complete' : '⚠️ Review may be incomplete'}`,
+              `**Verdict**: ${verdictEmoji} ${verdict}`,
             ];
 
             if (reviewFound && reviewText) {
@@ -272,6 +365,118 @@ jobs:
             });
 
             core.info(`Check run ${checkRunId} completed: ${conclusion}`);
+
+      - name: Check review-fix eligibility
+        if: steps.tier.outputs.tier != '1' && steps.dedup.outputs.skip != 'true' && steps.verdict.outputs.verdict == 'REQUEST_CHANGES'
+        id: review-fix
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const prNumber = pr.number;
+            const prLabels = pr.labels.map(l => l.name);
+
+            // Only auto-fix agent-created PRs
+            if (!prLabels.includes('agent-pr')) {
+              core.info('PR does not have agent-pr label — skipping review-fix dispatch.');
+              core.setOutput('eligible', 'false');
+              core.setOutput('reason', 'Not an agent-created PR');
+              return;
+            }
+
+            // Skip if already escalated
+            if (prLabels.includes('agent:needs-judgment')) {
+              core.info('PR already has agent:needs-judgment label — skipping.');
+              core.setOutput('eligible', 'false');
+              core.setOutput('reason', 'Already escalated');
+              return;
+            }
+
+            // Count review-fix-cycle-N labels to determine cycle number
+            let maxCycle = 0;
+            for (const label of prLabels) {
+              const match = label.match(/^review-fix-cycle-(\d+)$/);
+              if (match) {
+                const n = parseInt(match[1], 10);
+                if (n > maxCycle) maxCycle = n;
+              }
+            }
+            const nextCycle = maxCycle + 1;
+
+            if (nextCycle > 3) {
+              core.info(`Max review-fix cycles reached (${maxCycle} cycles). Escalating.`);
+              core.setOutput('eligible', 'false');
+              core.setOutput('escalate', 'true');
+              core.setOutput('reason', `Max cycles exceeded (${maxCycle})`);
+              return;
+            }
+
+            // Extract linked issue number from PR body marker
+            const prBody = pr.body || '';
+            const issueMatch = prBody.match(/<!-- issue-implementer: #(\d+) -->/);
+            const issueNumber = issueMatch ? issueMatch[1] : '';
+
+            core.setOutput('eligible', 'true');
+            core.setOutput('escalate', 'false');
+            core.setOutput('cycle', String(nextCycle));
+            core.setOutput('issue-number', issueNumber);
+            core.info(`Review-fix eligible: cycle ${nextCycle}, issue #${issueNumber || 'unknown'}`);
+
+      - name: Escalate — max review-fix cycles
+        if: steps.review-fix.outputs.escalate == 'true'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const prNumber = context.payload.pull_request.number;
+
+            // Create label if it doesn't exist
+            try {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: 'agent:needs-judgment',
+                color: 'E4E669',
+                description: 'Agent needs human judgment to proceed',
+              });
+            } catch {}
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              labels: ['agent:needs-judgment'],
+            });
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body: [
+                '## ⚠️ Review-Fix Loop — Max Cycles Reached',
+                '',
+                'The automated review-fix cycle has reached the maximum of 3 attempts.',
+                'A human should review the remaining issues and decide next steps.',
+                '',
+                `**Run**: [${context.runId}](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
+                '',
+                '---',
+                '*🤖 [Code Review Agent](https://github.com/codefactory) — automated code review.*',
+              ].join('\n'),
+            });
+
+      - name: Dispatch implementer for review-fix
+        if: steps.review-fix.outputs.eligible == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          CYCLE: ${{ steps.review-fix.outputs.cycle }}
+        run: |
+          echo "Dispatching implementer for review-fix: PR #${PR_NUM}, cycle ${CYCLE}"
+          gh workflow run issue-implementer.yml \
+            --repo "${{ github.repository }}" \
+            --field pr_number="${PR_NUM}" \
+            --field review_fix_cycle="${CYCLE}"
+          echo "✔ Dispatched issue-implementer.yml for review-fix"
 
       - name: Report skip as success
         if: steps.tier.outputs.tier == '1' || steps.dedup.outputs.skip == 'true'

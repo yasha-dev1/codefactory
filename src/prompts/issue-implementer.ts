@@ -29,9 +29,9 @@ export function buildIssueImplementerPrompt(
 
 ### 1. ${prefs.ciProvider === 'github-actions' ? '.github/workflows/issue-implementer.yml' : prefs.ciProvider === 'gitlab-ci' ? '.gitlab/ci/issue-implementer.yml' : 'bitbucket-pipelines-issue-implementer.yml'}
 
-A CI workflow triggered when a new issue is opened or labeled with the trigger label \`agent:implement\`, OR dispatched by the triage workflow.
+A CI workflow triggered when a new issue is opened or labeled with the trigger label \`agent:implement\`, OR dispatched by the triage workflow, OR dispatched by the review agent in review-fix mode.
 
-**Trigger** (CRITICAL — dual trigger for event chaining):
+**Trigger** (CRITICAL — dual trigger for event chaining + review-fix):
 ${
   prefs.ciProvider === 'github-actions'
     ? `\`\`\`yaml
@@ -42,13 +42,29 @@ on:
     inputs:
       issue_number:
         description: 'Issue number to implement'
-        required: true
+        required: false
+        type: string
+      pr_number:
+        description: 'PR number for review-fix mode'
+        required: false
+        type: string
+      review_fix_cycle:
+        description: 'Review-fix cycle number (1-3)'
+        required: false
         type: string
 \`\`\`
 
 **IMPORTANT**: The \`workflow_dispatch\` trigger is required because GitHub Actions does NOT trigger \`labeled\` events from actions performed using the default \`GITHUB_TOKEN\`. When the triage workflow adds the \`agent:implement\` label, the \`labeled\` event is suppressed to prevent infinite loops. The triage workflow dispatches this workflow explicitly via \`gh workflow run\`.
 
-When triggered via \`workflow_dispatch\`:
+**Review-fix mode**: When dispatched with \`pr_number\` and \`review_fix_cycle\`, the workflow enters review-fix mode:
+- Checks out the existing PR branch (instead of creating a new one)
+- Extracts the latest review feedback from PR comments (via \`<!-- review-verdict: REQUEST_CHANGES -->\` marker)
+- Builds a focused prompt with the review feedback as context
+- Runs Claude to fix only the flagged issues
+- Pushes to the existing branch (triggering a new review cycle)
+- Max 3 cycles — after that, escalates with \`agent:needs-judgment\`
+
+When triggered via \`workflow_dispatch\` (issue mode):
 - \`github.event.issue\` and \`context.issue\` are NOT available
 - The workflow must fetch issue data via \`gh issue view <number> --json number,title,body,labels,user\`
 - All downstream steps must derive issue references from the guard output (not from context)
@@ -188,14 +204,12 @@ interface ImplementerDecision {
 
 The script:
 - Uses shebang: \`#!/usr/bin/env npx tsx\`
-- Reads the issue payload from \`ISSUE_JSON\` environment variable
-- Exports public functions: \`slugify()\`, \`deriveBranchName()\`, \`findExistingPR()\`, \`evaluate()\`
+- Reads the issue payload from \`ISSUE_JSON\` environment variable (issue mode) or \`PR_NUMBER\`/\`REVIEW_FIX_CYCLE\` (review-fix mode)
+- Exports public functions: \`slugify()\`, \`deriveBranchName()\`, \`findExistingPR()\`, \`evaluate()\`, \`evaluateReviewFix()\`
 - Supports \`--evaluate\` CLI mode (outputs JSON decision) and \`--self-test\` mode (runs built-in assertions)
-- Checks for the \`agent:implement\` label (required)
-- Checks for blocking labels (\`agent:skip\`, \`wontfix\`, \`duplicate\`, \`invalid\`)
-- Searches for existing PRs linked to this issue (via \`<!-- issue-implementer: #N -->\` marker in issue comments, using \`gh issue view\`)
-- Derives the branch name: \`cf/<slug>-<number>\`, max 60 chars
-- Returns a JSON decision object with issueNumber and issueTitle (used by downstream steps)
+- **Issue mode** (\`ISSUE_JSON\` set): checks for \`agent:implement\` label, blocking labels, existing PRs, derives branch name
+- **Review-fix mode** (\`PR_NUMBER\` set): verifies cycle <= 3, PR is OPEN, returns branch name from PR
+- Returns a JSON decision object used by downstream workflow steps
 
 ## Critical: No Plan Mode in CI
 

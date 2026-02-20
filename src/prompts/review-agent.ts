@@ -45,7 +45,16 @@ A CI workflow triggered on pull_request events (opened, synchronize). It must:
 - **Architecture**: Layer boundary compliance check
 - **Test Coverage**: Assessment of test adequacy for the changes
 - **Verdict**: APPROVE, REQUEST_CHANGES, or COMMENT
+- Verdict marker: \`<!-- review-verdict: <verdict> -->\` (used by the review-fix dispatch step)
 - SHA marker: \`<!-- harness-review: <sha> -->\`
+
+**Verdict extraction and review-fix dispatch:**
+After the review completes, the workflow:
+1. Parses the verdict from the review output (JSON \`.verdict\` field, or regex fallback for \`VERDICT:\` line)
+2. Includes the verdict in the review comment with a \`<!-- review-verdict: X -->\` marker
+3. If verdict is \`REQUEST_CHANGES\` and the PR has the \`agent-pr\` label, dispatches the issue-implementer workflow in review-fix mode
+4. Counts \`review-fix-cycle-N\` labels on the PR to determine the cycle number (max 3)
+5. After 3 failed cycles, adds \`agent:needs-judgment\` label and escalates to human review
 
 **Strictness behavior:**
 - \`${prefs.strictnessLevel}\` mode:
