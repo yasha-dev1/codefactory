@@ -258,70 +258,33 @@ jobs:
             echo "✔ Extracted review ($(echo "$REVIEW_TEXT" | wc -c) chars)"
           fi
 
-      - name: Parse verdict from review
+      - name: Post review comment
         if: steps.tier.outputs.tier != '1' && steps.dedup.outputs.skip != 'true'
-        id: verdict
-        env:
-          REVIEW_TEXT: ${{ steps.extract.outputs.review || '' }}
-          REVIEW_FOUND: ${{ steps.extract.outputs.found || 'false' }}
-        run: |
-          REVIEW_TEXT="${REVIEW_TEXT}"
-          if [[ "$REVIEW_FOUND" != "true" || -z "$REVIEW_TEXT" ]]; then
-            echo "verdict=COMMENT" >> "$GITHUB_OUTPUT"
-            echo "Verdict: COMMENT (no review text)"
-            exit 0
-          fi
-
-          # Try JSON parse first — review-prompt.md requests JSON output
-          VERDICT=$(echo "$REVIEW_TEXT" | jq -r '.verdict // empty' 2>/dev/null || echo "")
-
-          # Fallback: regex scan for VERDICT: line or **Verdict**: line
-          if [[ -z "$VERDICT" ]]; then
-            VERDICT=$(echo "$REVIEW_TEXT" | grep -oP '(?i)\*?\*?verdict\*?\*?\s*:?\s*(APPROVE|REQUEST_CHANGES|COMMENT)' | head -1 | grep -oP '(APPROVE|REQUEST_CHANGES|COMMENT)' || echo "")
-          fi
-
-          # Default to COMMENT if extraction failed (safe — no automated action)
-          if [[ -z "$VERDICT" ]]; then
-            VERDICT="COMMENT"
-            echo "::notice::Could not extract verdict from review — defaulting to COMMENT."
-          fi
-
-          echo "verdict=${VERDICT}" >> "$GITHUB_OUTPUT"
-          echo "Verdict: ${VERDICT}"
-
-      - name: Post review marker
-        if: steps.tier.outputs.tier != '1' && steps.dedup.outputs.skip != 'true'
+        id: post-review
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         env:
           REVIEW_TEXT: ${{ steps.extract.outputs.review || '' }}
           REVIEW_FOUND: ${{ steps.extract.outputs.found || 'false' }}
           REVIEW_OUTCOME: ${{ steps.review.outcome }}
-          VERDICT: ${{ steps.verdict.outputs.verdict || 'COMMENT' }}
         with:
           script: |
             const headSha = context.payload.pull_request.head.sha;
             const marker = `<!-- harness-review: ${headSha} -->`;
-            const verdictMarker = `<!-- review-verdict: ${process.env.VERDICT} -->`;
             const tier = '${{ steps.tier.outputs.tier }}';
             const reviewText = process.env.REVIEW_TEXT || '';
             const reviewFound = process.env.REVIEW_FOUND === 'true';
             const reviewOutcome = process.env.REVIEW_OUTCOME || 'failure';
-            const verdict = process.env.VERDICT || 'COMMENT';
-
-            const verdictEmoji = verdict === 'APPROVE' ? '✅' : verdict === 'REQUEST_CHANGES' ? '🔄' : '💬';
 
             const sections = [
               marker,
-              verdictMarker,
               `## 🔍 Code Review Agent — Tier ${tier}`,
               '',
               `**Commit**: \`${headSha.slice(0, 12)}\``,
               `**Status**: ${reviewOutcome === 'success' ? '✅ Complete' : '⚠️ Review may be incomplete'}`,
-              `**Verdict**: ${verdictEmoji} ${verdict}`,
             ];
 
             if (reviewFound && reviewText) {
-              sections.push('', '### Review', '', reviewText);
+              sections.push('', reviewText);
             } else {
               sections.push('', '*No review output was produced. The review agent may have encountered an error.*');
             }
@@ -332,12 +295,128 @@ jobs:
               '*🤖 [Code Review Agent](https://github.com/codefactory) — automated code review.*',
             );
 
-            await github.rest.issues.createComment({
+            const { data: comment } = await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.payload.pull_request.number,
               body: sections.join('\n'),
             });
+            core.setOutput('comment-id', comment.id);
+
+      - name: Run verdict classifier
+        if: steps.tier.outputs.tier != '1' && steps.dedup.outputs.skip != 'true' && steps.extract.outputs.found == 'true'
+        id: classifier
+        continue-on-error: true
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            Read the following code review and classify the verdict.
+
+            Rules:
+            - APPROVE: The review found no blocking issues. The code is safe to merge.
+            - REQUEST_CHANGES: The review found one or more blocking issues (security vulnerabilities, bugs that cause runtime errors, data loss, or crashes). Only blocking issues warrant REQUEST_CHANGES — warnings and suggestions do not.
+            - COMMENT: The review found warnings or suggestions but no blocking issues, OR the review is unclear.
+
+            <review>
+            ${{ steps.extract.outputs.review }}
+            </review>
+          claude_args: >-
+            --model claude-haiku-4-5-20251001
+            --max-turns 1
+            --json '{"type":"object","properties":{"verdict":{"type":"string","enum":["APPROVE","REQUEST_CHANGES","COMMENT"]},"reason":{"type":"string","description":"One sentence explaining the verdict"}},"required":["verdict","reason"]}'
+          allowed_bots: 'github-actions,implementer-bot'
+
+      - name: Extract verdict
+        if: steps.tier.outputs.tier != '1' && steps.dedup.outputs.skip != 'true'
+        id: verdict
+        env:
+          STRUCTURED_OUTPUT: ${{ steps.classifier.outputs.structured_output || '' }}
+          EXECUTION_FILE: ${{ steps.classifier.outputs.execution_file || '' }}
+          CLASSIFIER_OUTCOME: ${{ steps.classifier.outcome || 'failure' }}
+        run: |
+          VERDICT="COMMENT"
+
+          if [[ "$CLASSIFIER_OUTCOME" != "success" ]]; then
+            echo "::notice::Verdict classifier failed — defaulting to COMMENT."
+            echo "verdict=COMMENT" >> "$GITHUB_OUTPUT"
+            echo "reason=Classifier failed" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Try structured_output first (from --json)
+          if [[ -n "$STRUCTURED_OUTPUT" ]]; then
+            VERDICT=$(echo "$STRUCTURED_OUTPUT" | jq -r '.verdict // empty' 2>/dev/null || echo "")
+            REASON=$(echo "$STRUCTURED_OUTPUT" | jq -r '.reason // empty' 2>/dev/null || echo "")
+          fi
+
+          # Fallback: parse execution file result turn
+          if [[ -z "$VERDICT" && -n "$EXECUTION_FILE" && -f "$EXECUTION_FILE" ]]; then
+            RESULT_TEXT=$(jq -r '[.[] | select(.type == "result")] | last | .result // ""' "$EXECUTION_FILE" 2>/dev/null || echo "")
+            if [[ -n "$RESULT_TEXT" && "$RESULT_TEXT" != "null" ]]; then
+              VERDICT=$(echo "$RESULT_TEXT" | jq -r '.verdict // empty' 2>/dev/null || echo "")
+              REASON=$(echo "$RESULT_TEXT" | jq -r '.reason // empty' 2>/dev/null || echo "")
+            fi
+          fi
+
+          # Default to COMMENT if extraction failed (safe — no automated action)
+          if [[ -z "$VERDICT" || "$VERDICT" == "null" ]]; then
+            VERDICT="COMMENT"
+            REASON="Could not extract verdict"
+            echo "::notice::Could not extract verdict from classifier — defaulting to COMMENT."
+          fi
+
+          echo "verdict=${VERDICT}" >> "$GITHUB_OUTPUT"
+          echo "reason=${REASON}" >> "$GITHUB_OUTPUT"
+          echo "Verdict: ${VERDICT} — ${REASON}"
+
+      - name: Update review comment with verdict
+        if: steps.tier.outputs.tier != '1' && steps.dedup.outputs.skip != 'true' && steps.post-review.outputs.comment-id
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          COMMENT_ID: ${{ steps.post-review.outputs.comment-id }}
+          VERDICT: ${{ steps.verdict.outputs.verdict || 'COMMENT' }}
+          VERDICT_REASON: ${{ steps.verdict.outputs.reason || '' }}
+        with:
+          script: |
+            const commentId = parseInt(process.env.COMMENT_ID);
+            const verdict = process.env.VERDICT || 'COMMENT';
+            const reason = process.env.VERDICT_REASON || '';
+            const verdictMarker = `<!-- review-verdict: ${verdict} -->`;
+            const verdictEmoji = verdict === 'APPROVE' ? '✅' : verdict === 'REQUEST_CHANGES' ? '🔄' : '💬';
+
+            // Fetch current comment body
+            const { data: comment } = await github.rest.issues.getComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: commentId,
+            });
+
+            // Insert verdict marker and badge after the SHA marker line
+            let body = comment.body || '';
+            const lines = body.split('\n');
+            const insertIdx = lines.findIndex(l => l.startsWith('<!-- harness-review:'));
+            if (insertIdx !== -1) {
+              lines.splice(insertIdx + 1, 0, verdictMarker);
+            } else {
+              lines.unshift(verdictMarker);
+            }
+
+            // Insert verdict line after the **Status** line
+            const statusIdx = lines.findIndex(l => l.startsWith('**Status**'));
+            if (statusIdx !== -1) {
+              const verdictLine = `**Verdict**: ${verdictEmoji} ${verdict}${reason ? ` — ${reason}` : ''}`;
+              lines.splice(statusIdx + 1, 0, verdictLine);
+            }
+
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: commentId,
+              body: lines.join('\n'),
+            });
+
+            core.info(`Updated review comment with verdict: ${verdict}`);
 
       - name: Complete check run
         if: always() && steps.check.outputs.check-run-id

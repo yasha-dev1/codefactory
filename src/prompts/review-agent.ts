@@ -48,13 +48,14 @@ A CI workflow triggered on pull_request events (opened, synchronize). It must:
 - Verdict marker: \`<!-- review-verdict: <verdict> -->\` (used by the review-fix dispatch step)
 - SHA marker: \`<!-- harness-review: <sha> -->\`
 
-**Verdict extraction and review-fix dispatch:**
+**Two-step verdict flow:**
 After the review completes, the workflow:
-1. Parses the verdict from the review output (JSON \`.verdict\` field, or regex fallback for \`VERDICT:\` line)
-2. Includes the verdict in the review comment with a \`<!-- review-verdict: X -->\` marker
-3. If verdict is \`REQUEST_CHANGES\` and the PR has the \`agent-pr\` label, dispatches the issue-implementer workflow in review-fix mode
-4. Counts \`review-fix-cycle-N\` labels on the PR to determine the cycle number (max 3)
-5. After 3 failed cycles, adds \`agent:needs-judgment\` label and escalates to human review
+1. Posts the raw review as a PR comment (natural markdown, human-readable)
+2. Runs a second, cheaper Claude call (Haiku, \`--json\` structured output) to classify the review into APPROVE / REQUEST_CHANGES / COMMENT
+3. Updates the review comment with the verdict and a \`<!-- review-verdict: X -->\` marker
+4. If verdict is \`REQUEST_CHANGES\` and the PR has the \`agent-pr\` label, dispatches the issue-implementer workflow in review-fix mode
+5. Counts \`review-fix-cycle-N\` labels on the PR to determine the cycle number (max 3)
+6. After 3 failed cycles, adds \`agent:needs-judgment\` label and escalates to human review
 
 **Strictness behavior:**
 - \`${prefs.strictnessLevel}\` mode:
