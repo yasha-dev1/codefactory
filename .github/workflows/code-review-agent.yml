@@ -233,9 +233,12 @@ jobs:
             // Invoke Claude via the claude CLI
             let reviewResult;
             try {
-              const escapedPrompt = prompt.replace(/'/g, "'\\''");
+              // Write prompt to a temp file to avoid shell escaping issues
+              const tmpPrompt = '/tmp/review-prompt.txt';
+              fs.writeFileSync(tmpPrompt, prompt, 'utf-8');
+
               const output = execSync(
-                `echo '${escapedPrompt}' | claude --output-format json --max-turns 1 -p -`,
+                `cat ${tmpPrompt} | claude --output-format json --max-turns 1 -p -`,
                 {
                   encoding: 'utf-8',
                   timeout: 600000,
@@ -244,8 +247,22 @@ jobs:
                 }
               );
 
-              // Extract JSON from the response
-              const jsonMatch = output.match(/\{[\s\S]*"verdict"[\s\S]*\}/);
+              // --output-format json wraps the response in a JSON envelope:
+              // { "type": "result", "result": "<claude text>", ... }
+              // We need to extract the inner review JSON from the "result" field.
+              let responseText = output;
+              try {
+                const wrapper = JSON.parse(output);
+                if (wrapper && typeof wrapper.result === 'string') {
+                  responseText = wrapper.result;
+                }
+              } catch {
+                // Not a JSON wrapper — treat the raw output as the response text
+                core.info('Output is not a JSON wrapper, using raw output.');
+              }
+
+              // Extract the review JSON from Claude's text response
+              const jsonMatch = responseText.match(/\{[\s\S]*"verdict"[\s\S]*\}/);
               if (jsonMatch) {
                 reviewResult = JSON.parse(jsonMatch[0]);
               } else {
@@ -255,7 +272,7 @@ jobs:
                   issues: [],
                   architecture: { compliant: true, violations: [] },
                   testCoverage: { adequate: true, notes: 'Review completed but output was not structured JSON.' },
-                  summary: output.slice(0, 2000),
+                  summary: responseText.slice(0, 2000),
                 };
               }
             } catch (error) {
@@ -275,7 +292,7 @@ jobs:
             core.info(`Review verdict: ${reviewResult.verdict}`);
 
       - name: Post review comment
-        if: steps.tier.outputs.tier != '1' && steps.dedup.outputs.skip != 'true'
+        if: always() && steps.tier.outputs.tier != '1' && steps.dedup.outputs.skip != 'true'
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         env:
           REVIEW_RESULT: ${{ steps.review.outputs.result }}

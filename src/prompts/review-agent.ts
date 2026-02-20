@@ -139,6 +139,14 @@ The review agent workflow should then use this prompt to instruct Claude to outp
 - The review agent check run MUST be tied to the exact commit SHA being reviewed
 - Stale review results (for old SHAs) must never be used in decisions
 
+## Claude CLI Invocation
+
+When invoking the Claude CLI in CI, follow these rules:
+
+- **Write the prompt to a temp file** and pipe it via \`cat /tmp/prompt.txt | claude ...\`. Do NOT use \`echo '...'\` with shell escaping — diffs contain special characters that break shell quoting.
+- **Parse the \`--output-format json\` wrapper**: The CLI wraps responses in a JSON envelope \`{ "type": "result", "result": "<text>", ... }\`. You must parse this wrapper first and extract the \`result\` field, then search for the review JSON within that text.
+- **Use \`always()\` in the post-comment step condition**: Add \`always()\` to ensure the PR comment is posted even if the review step fails (e.g., \`if: always() && <other conditions>\`).
+
 ## Quality Requirements
 
 - All workflows should use \`actions/github-script@v7\` for GitHub API interactions
