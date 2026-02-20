@@ -391,6 +391,9 @@ jobs:
           ISSUE_TITLE="${{ steps.guard.outputs.issue-title }}"
           DEFAULT_BRANCH="${{ github.event.repository.default_branch || 'main' }}"
 
+          # Set remote URL with token for push auth
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+
           # Stage all changes (new + modified)
           git add -A
 
