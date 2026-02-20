@@ -11,6 +11,7 @@ import { printBanner } from '../ui/banner.js';
 import { withSpinner } from '../ui/spinner.js';
 import { confirmPrompt, selectPrompt, inputPrompt } from '../ui/prompts.js';
 import { borderedInput } from '../ui/bordered-input.js';
+import type { SlashCommand } from '../ui/bordered-input.js';
 import { isGitRepo, getRepoRoot, hasUncommittedChanges } from '../utils/git.js';
 import { readFileIfExists } from '../utils/fs.js';
 import { NotAGitRepoError, ClaudeNotFoundError } from '../utils/errors.js';
@@ -261,6 +262,10 @@ export async function replCommand(): Promise<void> {
   printBanner();
 
   const allCommands = buildCommandChoices(store.list());
+  const slashCommands: SlashCommand[] = allCommands.map((c) => ({
+    name: c.name.slice(1),
+    description: c.description,
+  }));
 
   const ACCENT = '#FF8C00';
 
@@ -270,27 +275,38 @@ export async function replCommand(): Promise<void> {
       const raw = await borderedInput({
         hint: 'Type a task, or /command for saved prompts',
         accentColor: ACCENT,
+        commands: slashCommands,
       });
 
       if (!raw) continue;
 
       if (raw.startsWith('/')) {
-        // Filter commands by what was typed after "/"
         const filter = raw.slice(1).toLowerCase();
-        const filtered = filter
-          ? allCommands.filter((c) => c.name.slice(1).toLowerCase().includes(filter))
-          : allCommands;
 
-        if (filtered.length === 0) {
-          logger.warn(`No command found for "${raw}"`);
-          console.log();
-          continue;
+        // Check for exact match first (e.g., user Tab-completed a command)
+        const exactMatch = allCommands.find((c) => c.name.slice(1).toLowerCase() === filter);
+
+        let action: ReplAction;
+
+        if (exactMatch) {
+          action = exactMatch.value;
+        } else {
+          // Filter commands by what was typed after "/"
+          const filtered = filter
+            ? allCommands.filter((c) => c.name.slice(1).toLowerCase().includes(filter))
+            : allCommands;
+
+          if (filtered.length === 0) {
+            logger.warn(`No command found for "${raw}"`);
+            console.log();
+            continue;
+          }
+
+          action = await selectPrompt<ReplAction>(
+            'Select command:',
+            filtered.map((c) => ({ name: c.name, value: c.value })),
+          );
         }
-
-        const action = await selectPrompt<ReplAction>(
-          'Select command:',
-          filtered.map((c) => ({ name: c.name, value: c.value })),
-        );
 
         if (action.type === 'prompt') {
           await promptActions(store, action.name);
