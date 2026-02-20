@@ -98,6 +98,7 @@ When triggered via \`workflow_dispatch\`:
 5. **Agent execution**:
    - Invoke Claude Code using \`anthropics/claude-code-action@v1\` with \`claude_code_oauth_token\`
    - Set \`--model claude-opus-4-6 --max-turns 30 --allowedTools "Read,Glob,Grep,Bash"\` in \`claude_args\` (claude-code-action does NOT enable tools by default — without \`--allowedTools\`, all tool calls will be permission-denied)
+   - Set \`allowed_bots: 'github-actions'\` — this workflow is dispatched by the triage workflow using \`GITHUB_TOKEN\`, so the actor is \`github-actions[bot]\`. Without \`allowed_bots\`, the action rejects bot-initiated runs.
    - The agent reads the codebase (read-only) and produces a structured plan
    - Timeout: 15 minutes
 

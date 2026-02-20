@@ -108,6 +108,7 @@ When triggered via \`workflow_dispatch\`:
    - Pass the built prompt via the action's \`prompt\` input
    - The agent reads CLAUDE.md and harness.config.json for project conventions
    - Set \`--max-turns 100 --allowedTools "Edit,Write,Read,Glob,Grep,Bash"\` in \`claude_args\` (claude-code-action does NOT enable write tools by default — without \`--allowedTools\`, all Edit/Write/Bash calls will be permission-denied)
+   - Set \`allowed_bots: 'github-actions'\` — this workflow is dispatched by other workflows using \`GITHUB_TOKEN\`, so the actor is \`github-actions[bot]\`. Without \`allowed_bots\`, the action rejects bot-initiated runs.
    - Set a timeout of ${prefs.strictnessLevel === 'strict' ? '30' : prefs.strictnessLevel === 'standard' ? '45' : '60'} minutes
 
 7. **Post-implementation checks**:
