@@ -32,6 +32,7 @@ concurrency:
 jobs:
   implement:
     name: Implementer Agent
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'agent:implement'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
