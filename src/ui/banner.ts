@@ -1,9 +1,8 @@
-import { createRequire } from 'node:module';
-
 import chalk from 'chalk';
 
-const require = createRequire(import.meta.url);
-const pkg = require('../../package.json') as { version: string };
+import { getPackageInfo } from '../utils/package-info.js';
+
+const pkg = getPackageInfo();
 
 // "CF" monogram using box-drawing characters (single-width, renders correctly in all terminals)
 const CF_LOGO_LINES = ['╔══╗ ╔══╗', '║    ╠══╝', '║    ║   ', '╚══╝ ╚   '];
