@@ -147,6 +147,16 @@ jobs:
             core.setOutput('prompt', prompt);
             core.info(`Triage prompt built (${prompt.length} chars)`);
 
+      - name: Write triage JSON schema
+        if: steps.guard.outputs.should-triage == 'true'
+        id: schema
+        run: |
+          cat > /tmp/triage-schema.json << 'SCHEMA_EOF'
+          {"type":"object","required":["actionable","confidence","summary","suggestedLabels","estimatedComplexity"],"properties":{"actionable":{"type":"boolean"},"confidence":{"type":"number"},"missingInfo":{"type":"array","items":{"type":"string"}},"summary":{"type":"string"},"suggestedLabels":{"type":"array","items":{"type":"string"}},"estimatedComplexity":{"type":"string","enum":["low","medium","high"]},"reproduced":{"type":["boolean","null"]},"reproductionNotes":{"type":"string"}},"additionalProperties":false}
+          SCHEMA_EOF
+          SCHEMA=$(cat /tmp/triage-schema.json | tr -d '\n' | tr -s ' ')
+          echo "value=${SCHEMA}" >> "$GITHUB_OUTPUT"
+
       - name: Run Claude triage analysis
         if: steps.guard.outputs.should-triage == 'true'
         id: claude-triage
@@ -154,122 +164,45 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: ${{ steps.build-prompt.outputs.prompt }}
-          claude_args: '--max-turns 15'
+          claude_args: "--max-turns 15 --json-schema '${{ steps.schema.outputs.value }}'"
 
-      - name: Extract verdict from execution output
+      - name: Parse structured verdict
         if: steps.guard.outputs.should-triage == 'true'
         id: verdict
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         env:
-          EXECUTION_FILE: ${{ steps.claude-triage.outputs.execution_file }}
+          STRUCTURED_OUTPUT: ${{ steps.claude-triage.outputs.structured_output || '' }}
         with:
           script: |
-            const fs = require('fs');
-            const execFile = process.env.EXECUTION_FILE || '';
+            const raw = process.env.STRUCTURED_OUTPUT || '';
+            core.info(`Structured output length: ${raw.length}`);
 
-            // --- Strategy 1: Read execution file ---
-            let claudeText = '';
-            if (execFile && fs.existsSync(execFile)) {
-              try {
-                const raw = fs.readFileSync(execFile, 'utf-8');
-
-                // The execution file may be JSON or JSONL
-                // Try single JSON object first
-                try {
-                  const data = JSON.parse(raw);
-                  // Claude CLI result format: { type: "result", result: "..." }
-                  if (data.result) {
-                    claudeText = typeof data.result === 'string' ? data.result : JSON.stringify(data.result);
-                  }
-                } catch {
-                  // Try JSONL — scan each line for assistant messages or result
-                  for (const line of raw.trim().split('\n')) {
-                    try {
-                      const msg = JSON.parse(line);
-                      if (msg.type === 'result' && msg.result) {
-                        claudeText = typeof msg.result === 'string' ? msg.result : JSON.stringify(msg.result);
-                      } else if (msg.role === 'assistant' && msg.content) {
-                        // Extract text from content blocks
-                        const texts = (Array.isArray(msg.content) ? msg.content : [msg.content])
-                          .filter(b => typeof b === 'string' || b.type === 'text')
-                          .map(b => typeof b === 'string' ? b : b.text);
-                        if (texts.length > 0) claudeText = texts.join('\n');
-                      }
-                    } catch {}
-                  }
-                }
-
-                core.info(`Extracted ${claudeText.length} chars from execution file`);
-              } catch (e) {
-                core.warning(`Failed to read execution file: ${e.message}`);
-              }
-            } else {
-              core.warning(`No execution file found at: ${execFile}`);
-            }
-
-            // --- Strategy 2: Fall back to reading the latest issue comment ---
-            if (!claudeText) {
-              core.info('Falling back to reading latest issue comment...');
-              try {
-                const { data: comments } = await github.rest.issues.listComments({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: context.issue.number,
-                  per_page: 10,
-                });
-                // Look for the most recent comment with JSON verdict (not our own marker comments)
-                for (const c of comments.reverse()) {
-                  if (c.body && c.body.includes('"actionable"') && !c.body.includes('<!-- issue-triage')) {
-                    claudeText = c.body;
-                    core.info('Found verdict in issue comment');
-                    break;
-                  }
-                }
-              } catch (e) {
-                core.warning(`Failed to read issue comments: ${e.message}`);
-              }
-            }
-
-            if (!claudeText) {
-              core.warning('No Claude output found from execution file or comments');
+            if (!raw) {
+              core.warning('No structured output from Claude — structured_output is empty');
               core.setOutput('parsed', 'false');
               core.setOutput('raw-text', '');
               return;
             }
 
-            // --- Parse the JSON verdict ---
             let verdict = null;
             try {
-              // Try to find a JSON object with "actionable" field
-              const jsonMatch = claudeText.match(/\{[\s\S]*?"actionable"[\s\S]*?\}/);
-              if (jsonMatch) {
-                verdict = JSON.parse(jsonMatch[0]);
-              }
+              verdict = JSON.parse(raw);
             } catch (e) {
-              core.warning(`JSON parse failed: ${e.message}`);
-            }
-
-            if (!verdict) {
-              // Try stripping markdown fences
-              try {
-                const fenceMatch = claudeText.match(/```(?:json)?\s*([\s\S]*?)```/);
-                if (fenceMatch) {
-                  verdict = JSON.parse(fenceMatch[1].trim());
-                }
-              } catch {}
-            }
-
-            if (!verdict) {
-              core.warning('Could not parse verdict JSON from Claude output');
+              core.warning(`Failed to parse structured_output as JSON: ${e.message}`);
               core.setOutput('parsed', 'false');
-              // Store raw text for debugging in the route step
-              const truncated = claudeText.slice(0, 2000);
-              core.setOutput('raw-text', truncated);
+              core.setOutput('raw-text', raw.slice(0, 2000));
+              return;
+            }
+
+            if (!verdict || typeof verdict.actionable !== 'boolean') {
+              core.warning('Structured output missing required "actionable" field');
+              core.setOutput('parsed', 'false');
+              core.setOutput('raw-text', raw.slice(0, 2000));
               return;
             }
 
             core.setOutput('parsed', 'true');
-            core.setOutput('actionable', String(verdict.actionable || false));
+            core.setOutput('actionable', String(verdict.actionable));
             core.setOutput('confidence', String(verdict.confidence || 0));
             core.setOutput('complexity', verdict.estimatedComplexity || 'medium');
             core.setOutput('summary', verdict.summary || '');
@@ -280,7 +213,7 @@ jobs:
               (l) => l === 'bug' || l === 'ui-bug' || l === 'visual-bug'
             );
             core.setOutput('is-bug', String(isBug));
-            core.setOutput('reproduced', String(verdict.reproduced || false));
+            core.setOutput('reproduced', String(verdict.reproduced ?? false));
             core.setOutput('reproduction-notes', verdict.reproductionNotes || '');
             core.setOutput('raw-text', '');
 
@@ -362,44 +295,20 @@ jobs:
         id: repro-result
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         env:
-          REPRO_EXECUTION_FILE: ${{ steps.reproduce.outputs.execution_file }}
+          REPRO_OUTPUT: ${{ steps.reproduce.outputs.structured_output || '' }}
         with:
           script: |
-            const fs = require('fs');
-            const execFile = process.env.REPRO_EXECUTION_FILE || '';
-            let text = '';
-
-            if (execFile && fs.existsSync(execFile)) {
+            const raw = process.env.REPRO_OUTPUT || '';
+            if (raw) {
               try {
-                const raw = fs.readFileSync(execFile, 'utf-8');
-                try {
-                  const data = JSON.parse(raw);
-                  if (data.result) text = typeof data.result === 'string' ? data.result : JSON.stringify(data.result);
-                } catch {
-                  for (const line of raw.trim().split('\n').reverse()) {
-                    try {
-                      const msg = JSON.parse(line);
-                      if (msg.type === 'result' && msg.result) {
-                        text = typeof msg.result === 'string' ? msg.result : JSON.stringify(msg.result);
-                        break;
-                      }
-                    } catch {}
-                  }
-                }
-              } catch {}
-            }
-
-            try {
-              const match = text.match(/\{[\s\S]*?"reproduced"[\s\S]*?\}/);
-              if (match) {
-                const result = JSON.parse(match[0]);
+                const result = JSON.parse(raw);
                 core.setOutput('reproduced', String(result.reproduced || false));
                 core.setOutput('notes', result.notes || '');
                 core.info(`Reproduction result: reproduced=${result.reproduced}`);
                 return;
+              } catch (e) {
+                core.warning(`Failed to parse reproduction output: ${e.message}`);
               }
-            } catch (e) {
-              core.warning(`Failed to parse reproduction result: ${e.message}`);
             }
             core.setOutput('reproduced', 'false');
             core.setOutput('notes', 'Reproduction phase did not produce parseable output.');
