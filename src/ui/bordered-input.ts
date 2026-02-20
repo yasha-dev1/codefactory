@@ -41,7 +41,14 @@ const _borderedInput = createPrompt<string, BorderedInputConfig>((config, done) 
 
   useKeypress((key, rl) => {
     if (isEnterKey(key)) {
-      done(rl.line.trim());
+      if (showSuggestions && filtered.length > 0) {
+        const selected = filtered[selectedIndex];
+        if (selected) {
+          done(`/${selected.name}`);
+          return;
+        }
+      }
+      done(value);
       return;
     }
 
