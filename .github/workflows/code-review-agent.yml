@@ -172,13 +172,21 @@ jobs:
 
           echo "Execution file: ${EXECUTION_FILE} ($(wc -c < "$EXECUTION_FILE") bytes)"
 
-          # The execution file is JSONL from Claude Code SDK.
-          # Slurp into array, find assistant messages, extract text content.
-          REVIEW_TEXT=$(jq -s -r '
-            [.[] | select(.type == "assistant") |
-             (.message.content // [])[] | select(.type == "text") | .text
-            ] | last // ""
+          # The execution file is a JSON array (not JSONL) from Claude Code SDK.
+          # It contains a "result" turn at the end with the final response text.
+          # Fallback: extract last assistant text content from message turns.
+          REVIEW_TEXT=$(jq -r '
+            [.[] | select(.type == "result")] | last | .result // ""
           ' "$EXECUTION_FILE" 2>/dev/null || echo "")
+
+          # Fallback: if result turn is empty, get last assistant text
+          if [[ -z "$REVIEW_TEXT" || "$REVIEW_TEXT" == "null" ]]; then
+            REVIEW_TEXT=$(jq -r '
+              [.[] | select(.type == "assistant") |
+               .message.content[] | select(.type == "text") | .text
+              ] | last // ""
+            ' "$EXECUTION_FILE" 2>/dev/null || echo "")
+          fi
 
           if [[ -z "$REVIEW_TEXT" || "$REVIEW_TEXT" == "null" ]]; then
             echo "found=false" >> "$GITHUB_OUTPUT"

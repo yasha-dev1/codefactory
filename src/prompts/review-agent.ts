@@ -132,7 +132,7 @@ Do NOT generate a separate \`scripts/review-prompt.md\` file. The prompt lives i
 
 The review agent workflow should use \`anthropics/claude-code-action@v1\` with \`claude_code_oauth_token: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\` for authentication. Do NOT use \`ANTHROPIC_API_KEY\`.
 
-**IMPORTANT — Extracting Claude's response**: The action does NOT have a \`result\` output. Claude's response is available via the \`execution_file\` output (a JSONL file containing all SDK messages). To extract the text:
+**IMPORTANT — Extracting Claude's response**: The action does NOT have a \`result\` output. Claude's response is available via the \`execution_file\` output — a JSON array of SDK turn objects (NOT JSONL, do NOT use \`jq -s\`). Turn types: \`system\` (init), \`assistant\` (Claude responses with \`.message.content[]\`), \`user\` (tool results), \`result\` (final summary with \`.result\` text). To extract:
 \`\`\`yaml
 - name: Run Claude review
   id: review
@@ -149,7 +149,12 @@ The review agent workflow should use \`anthropics/claude-code-action@v1\` with \
   env:
     EXECUTION_FILE: \${{ steps.review.outputs.execution_file }}
   run: |
-    REVIEW_TEXT=$(jq -s -r '[.[] | select(.type == "assistant") | (.message.content // [])[] | select(.type == "text") | .text] | last // ""' "$EXECUTION_FILE" 2>/dev/null || echo "")
+    # Primary: final result text from the "result" turn
+    REVIEW_TEXT=$(jq -r '[.[] | select(.type == "result")] | last | .result // ""' "$EXECUTION_FILE" 2>/dev/null || echo "")
+    # Fallback: last assistant text content
+    if [[ -z "$REVIEW_TEXT" || "$REVIEW_TEXT" == "null" ]]; then
+      REVIEW_TEXT=$(jq -r '[.[] | select(.type == "assistant") | .message.content[] | select(.type == "text") | .text] | last // ""' "$EXECUTION_FILE" 2>/dev/null || echo "")
+    fi
     if [[ -n "$REVIEW_TEXT" && "$REVIEW_TEXT" != "null" ]]; then
       { echo "review<<REVIEW_EOF"; echo "$REVIEW_TEXT"; echo "REVIEW_EOF"; } >> "$GITHUB_OUTPUT"
       echo "found=true" >> "$GITHUB_OUTPUT"
