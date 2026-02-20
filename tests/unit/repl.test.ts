@@ -102,7 +102,7 @@ vi.mock('../../src/core/terminal.js', () => ({
 import { exec } from 'node:child_process';
 import { writeFile } from 'node:fs/promises';
 import { isGitRepo, getRepoRoot, hasUncommittedChanges } from '../../src/utils/git.js';
-import { inputPrompt, confirmPrompt } from '../../src/ui/prompts.js';
+import { inputPrompt, selectPrompt, confirmPrompt } from '../../src/ui/prompts.js';
 import { replCommand } from '../../src/commands/repl.js';
 import { NotAGitRepoError, ClaudeNotFoundError } from '../../src/utils/errors.js';
 import { createWorktree } from '../../src/core/worktree.js';
@@ -113,6 +113,7 @@ const mockedIsGitRepo = vi.mocked(isGitRepo);
 const mockedGetRepoRoot = vi.mocked(getRepoRoot);
 const mockedHasUncommittedChanges = vi.mocked(hasUncommittedChanges);
 const mockedInputPrompt = vi.mocked(inputPrompt);
+const mockedSelectPrompt = vi.mocked(selectPrompt);
 const mockedConfirmPrompt = vi.mocked(confirmPrompt);
 const mockedCreateWorktree = vi.mocked(createWorktree);
 const mockedOpenInNewTerminal = vi.mocked(openInNewTerminal);
@@ -292,5 +293,49 @@ describe('replCommand', () => {
     // Single quotes in path must be escaped as '\'' so the overall single-quoted
     // string remains valid bash
     expect(scriptContent).toContain("it'\\''s-a-test");
+  });
+
+  it('should pass commands array to borderedInput', async () => {
+    setupReplStartup();
+    mockedBorderedInput.mockRejectedValueOnce(makeExitPromptError());
+
+    await expect(replCommand()).rejects.toThrow('process.exit');
+
+    expect(mockedBorderedInput).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commands: expect.arrayContaining([
+          expect.objectContaining({ name: 'agent-system' }),
+          expect.objectContaining({ name: 'init' }),
+          expect.objectContaining({ name: 'help' }),
+          expect.objectContaining({ name: 'exit' }),
+        ]),
+      }),
+    );
+  });
+
+  it('should execute exact slash command without showing selectPrompt', async () => {
+    setupReplStartup();
+
+    // User types /exit (exact match)
+    mockedBorderedInput.mockResolvedValueOnce('/exit');
+
+    await expect(replCommand()).rejects.toThrow('process.exit');
+
+    // selectPrompt should NOT have been called because /exit is an exact match
+    expect(mockedSelectPrompt).not.toHaveBeenCalled();
+    expect(exitSpy).toHaveBeenCalledWith(0);
+  });
+
+  it('should skip empty input without error', async () => {
+    setupReplStartup();
+
+    // First call returns empty string, second call exits
+    mockedBorderedInput.mockResolvedValueOnce('');
+    mockedBorderedInput.mockRejectedValueOnce(makeExitPromptError());
+
+    await expect(replCommand()).rejects.toThrow('process.exit');
+
+    // borderedInput was called twice (empty input → loop continues → exit)
+    expect(mockedBorderedInput).toHaveBeenCalledTimes(2);
   });
 });
