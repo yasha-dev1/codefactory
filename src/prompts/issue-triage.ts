@@ -26,7 +26,7 @@ export function buildIssueTriagePrompt(detection: DetectionResult, prefs: UserPr
 
 ### 1. ${prefs.ciProvider === 'github-actions' ? '.github/workflows/issue-triage.yml' : prefs.ciProvider === 'gitlab-ci' ? '.gitlab/ci/issue-triage.yml' : 'bitbucket-pipelines-issue-triage.yml'}
 
-A CI workflow triggered when a new issue is opened or an existing issue is edited.
+A CI workflow triggered when a new issue is opened, edited, or reopened.
 
 **Trigger**:
 ${
@@ -34,10 +34,10 @@ ${
     ? `\`\`\`yaml
 on:
   issues:
-    types: [opened, edited]
+    types: [opened, edited, reopened]
 \`\`\`
 
-The workflow runs on every issue open and edit event. The guard script determines whether triage should proceed.`
+The workflow runs on every issue open, edit, and reopen event. The guard script determines whether triage should proceed (e.g., skip bots, skip already-triaged, allow re-triage on edit when \`needs-more-info\` is present).`
     : prefs.ciProvider === 'gitlab-ci'
       ? 'Trigger via webhook on issue creation or update. Use a CI job that runs the triage guard first.'
       : 'Trigger via webhook on issue creation or update. Use a pipeline that runs the triage guard first.'
@@ -46,58 +46,81 @@ The workflow runs on every issue open and edit event. The guard script determine
 **Permissions** (${prefs.ciProvider === 'github-actions' ? 'GitHub Actions' : prefs.ciProvider}):
 - issues: write (to add labels and comments)
 - contents: read (to read repo context)
+- actions: write (to dispatch the implementer workflow after triage)
 - id-token: write (required for Claude Code Action OAuth)
 
 **Workflow steps**:
 
 1. **Gate check** (via guard script):
-   - Skip if the issue author is a bot (check \`github.actor\` ends with \`[bot]\` or is in known bot list)
-   - Skip if the issue already has any triage result label (\`agent:implement\`, \`needs-more-info\`, \`needs-human-review\`, \`triage:failed\`)
+   - Skip if the issue author is a bot (check \`github.actor\` ends with \`[bot]\` or is in known bot list, or user type is \`Bot\`)
+   - Skip if the issue already has any triage result label (\`agent:implement\`, \`needs-human-review\`, \`wontfix\`, \`duplicate\`, \`invalid\`)
    - Skip if the event is actually a pull request (issues API can include PRs)
    - On \`edited\` events: only re-triage if the issue currently has \`needs-more-info\` label (author updated after feedback)
+   - On \`edited\` events: if the issue was never triaged (no triage labels at all), proceed with initial triage (handles issues that predate the workflow)
    - Output a JSON decision for the workflow to consume
 
 2. **Label setup**:
    - Ensure these labels exist in the repo (create if missing):
-     - \`needs-more-info\` (color: \`#d93f0b\`) — issue lacks required details
-     - \`agent:implement\` (color: \`#0e8a16\`) — issue is ready for implementation agent
-     - \`triage:failed\` (color: \`#b60205\`) — triage process errored
-     - \`needs-human-review\` (color: \`#fbca04\`) — issue needs manual assessment
+     - \`needs-more-info\` (color: \`FBCA04\`) — issue lacks required details
+     - \`agent:implement\` (color: \`0E8A16\`) — issue is ready for implementation agent
+     - \`triage:failed\` (color: \`D93F0B\`) — triage process errored
+     - \`needs-human-review\` (color: \`C5DEF5\`) — issue needs manual assessment
 
-3. **Claude triage analysis**:
-   - Invoke Claude Code using \`anthropics/claude-code-action@v1\` with \`claude_code_oauth_token: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\` (NOT \`ANTHROPIC_API_KEY\`)
-   - Pass the triage prompt and full issue title/body via the action's \`prompt\` input
-   - The agent evaluates the issue against quality criteria:
-     - **Clear description**: Does the issue clearly describe what is needed?
-     - **Reproducibility** (bugs): Are steps to reproduce provided?
-     - **Acceptance criteria**: Are success conditions defined or inferable?
-     - **Scope**: Is the scope reasonable for a single implementation?
-   - The agent must return a JSON verdict:
+3. **Claude triage analysis** (using structured output):
+   - Write a JSON schema file defining the verdict structure:
      \`\`\`json
      {
-       "actionable": true/false,
-       "confidence": 0.0-1.0,
-       "missingInfo": ["list of missing details"],
-       "summary": "one-line summary of the issue",
-       "suggestedLabels": ["bug", "enhancement", etc.],
-       "estimatedComplexity": "low" | "medium" | "high"
+       "type": "object",
+       "required": ["actionable", "confidence", "summary", "suggestedLabels", "estimatedComplexity"],
+       "properties": {
+         "actionable": { "type": "boolean" },
+         "confidence": { "type": "number" },
+         "missingInfo": { "type": "array", "items": { "type": "string" } },
+         "summary": { "type": "string" },
+         "suggestedLabels": { "type": "array", "items": { "type": "string" } },
+         "estimatedComplexity": { "type": "string", "enum": ["low", "medium", "high"] },
+         "reproduced": { "type": ["boolean", "null"] },
+         "reproductionNotes": { "type": "string" }
+       },
+       "additionalProperties": false
      }
      \`\`\`
+   - Invoke Claude Code using \`anthropics/claude-code-action@v1\` with \`claude_code_oauth_token: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\`
+   - Pass the triage prompt and full issue title/body/labels via the action's \`prompt\` input
+   - **CRITICAL**: Use \`--json-schema '<schema>'\` in \`claude_args\` to force structured output. The verdict is then available via \`steps.<id>.outputs.structured_output\` — this is the ONLY reliable way to get structured data from claude-code-action. Do NOT try to read \`claude_output\` or parse \`execution_file\` — those outputs do not contain the response text.
+   - The agent evaluates the issue against quality criteria
 
-4. **Decision routing**:
+4. **Parse structured verdict**:
+   - Read \`steps.<claude-step>.outputs.structured_output\`
+   - Parse as JSON and validate the required \`actionable\` field exists
+   - Extract: actionable, confidence, complexity, summary, missingInfo, suggestedLabels
+   - Determine if this is a UI bug for browser reproduction: only match labels like \`ui-bug\`, \`visual-bug\`, \`ui\`, \`frontend-bug\` — do NOT match plain \`bug\` label, as CLI/backend bugs should NOT trigger browser reproduction
+
+5. **Decision routing**:
    - If \`actionable === true\` AND \`confidence >= ${prefs.strictnessLevel === 'strict' ? '0.8' : prefs.strictnessLevel === 'standard' ? '0.7' : '0.6'}\`:
-     - Add the \`agent:implement\` label (triggers the issue-implementer workflow)
+     - Add the \`agent:implement\` label
      - Add any \`suggestedLabels\` that exist in the repo
-     - Post a comment: "Triage complete — this issue is actionable and has been queued for implementation. Complexity: <estimatedComplexity>. Summary: <summary>"
+     - Post a comment: "Triage complete — this issue is actionable and has been queued for implementation."
    - If \`actionable === false\` OR confidence is below threshold:
      - Add the \`needs-more-info\` label
-     - Post a comment @mentioning the issue author with specific missing information:
-       "Thanks for opening this issue. Before we can proceed, could you provide: <missingInfo list>. Once updated, this issue will be automatically re-triaged."
+     - Post a comment with specific missing information from the verdict's \`missingInfo\` array
+     - Include: "Edit this issue with the requested details and we will re-evaluate automatically."
    - If \`estimatedComplexity === "high"\` or the issue references critical paths:
      - Also add \`needs-human-review\` label
-     - Append to the comment: "Note: This issue has been flagged for human review due to its complexity."
+   - If parsing fails (no structured output or invalid JSON):
+     - Add \`triage:failed\` label
+     - Post comment indicating parse failure with raw output for debugging
 
-5. **Failure handling**:
+6. **Dispatch implementer workflow** (CRITICAL — GitHub Actions event chaining):
+   - **IMPORTANT**: Labels added by \`GITHUB_TOKEN\` within a workflow do NOT trigger \`labeled\` events on other workflows. This is a GitHub security measure to prevent infinite loops.
+   - After adding \`agent:implement\` label, the triage workflow MUST explicitly dispatch the implementer workflow using:
+     \`\`\`bash
+     gh workflow run issue-implementer.yml --field issue_number="<issue-number>"
+     \`\`\`
+   - This requires the \`actions: write\` permission (already listed above)
+   - Only dispatch when \`agent:implement\` was actually added in this run
+
+7. **Failure handling**:
    - If the triage agent crashes or times out:
      - Add the \`triage:failed\` label
      - Post a comment: "Automated triage encountered an error. A maintainer will review this issue manually."
@@ -117,18 +140,27 @@ ${prefs.strictnessLevel === 'strict' ? '- Confidence threshold: 0.8\n- High comp
 
 The triage agent's evaluation prompt is stored at \`.codefactory/prompts/issue-triage.md\` in the repository. This file is managed by the CodeFactory CLI and can be customized by the team.
 
-**The workflow must read this file at runtime** and pass its contents to Claude as the system prompt. For example in a GitHub Actions step:
+**The workflow must read this file at runtime** and pass its contents to Claude as the system prompt. Use a multi-line HEREDOC output pattern:
 \`\`\`yaml
 - name: Read triage prompt
-  id: prompt
-  run: echo "content=$(cat .codefactory/prompts/issue-triage.md)" >> "$GITHUB_OUTPUT"
+  id: prompt-file
+  run: |
+    if [[ -f ".codefactory/prompts/issue-triage.md" ]]; then
+      {
+        echo "content<<PROMPT_EOF"
+        cat .codefactory/prompts/issue-triage.md
+        echo "PROMPT_EOF"
+      } >> "$GITHUB_OUTPUT"
+    else
+      echo "content=Evaluate this issue for quality and actionability." >> "$GITHUB_OUTPUT"
+    fi
 \`\`\`
 
 Do NOT generate a separate \`scripts/issue-triage-prompt.md\` file. The prompt lives in \`.codefactory/prompts/issue-triage.md\` and is the single source of truth.
 
 ### 3. scripts/issue-triage-guard.ts
 
-A utility script that determines whether triage should run for this event:
+A TypeScript utility script that determines whether triage should run for this event:
 
 \`\`\`typescript
 interface TriageDecision {
@@ -137,17 +169,23 @@ interface TriageDecision {
   issueTitle: string;
   reason: string;
   isRetriage: boolean;  // true if this is a re-triage after author updated the issue
-  skipReason: string | null;  // non-null if shouldTriage is false
+  skipReason: string;   // empty string if shouldTriage is true
 }
 \`\`\`
 
 The script:
-- Reads the issue event payload from \`GITHUB_EVENT_PATH\`
-- Checks if the issue author is a bot (skip if so)
-- Checks if the issue already has triage result labels (\`agent:implement\`, \`needs-more-info\`, \`needs-human-review\`, \`triage:failed\`)
-- For \`edited\` events: only proceed if \`needs-more-info\` label is present (re-triage scenario)
-- Checks if the event is actually a pull request (skip if \`pull_request\` field exists)
-- Returns a JSON decision object for the workflow to consume
+- Uses shebang: \`#!/usr/bin/env npx tsx\`
+- Reads the issue payload from \`ISSUE_JSON\` environment variable (set via \`toJSON(github.event.issue)\` in the workflow)
+- Reads the event action from \`EVENT_NAME\` environment variable (set via \`github.event.action\`)
+- Exports public functions: \`isBot()\`, \`isAlreadyTriaged()\`, \`shouldRetriage()\`, \`evaluate()\`
+- Supports \`--evaluate\` CLI mode (outputs JSON decision) and \`--self-test\` mode (runs built-in assertions)
+- Bot detection: checks for \`[bot]\` and \`-bot\` suffixes in login, and \`Bot\` user type
+- Triaged labels: \`agent:implement\`, \`needs-human-review\`, \`wontfix\`, \`duplicate\`, \`invalid\`
+- Re-triage label: \`needs-more-info\`
+- Edit event logic:
+  1. If \`needs-more-info\` label present → re-triage (isRetriage=true)
+  2. If never triaged (no triaged labels) → initial triage (handles pre-existing issues)
+  3. If already triaged → skip
 
 ## Safety Constraints
 
@@ -156,14 +194,14 @@ The script:
 - All comments must be clearly attributed to the triage bot
 - Never auto-close issues — only label and comment
 - Rate-limit protection: the concurrency group prevents duplicate runs
-- Timeout: set a hard timeout of 5 minutes for the triage workflow
+- Timeout: set a hard timeout of 10 minutes for the triage workflow (allows time for Claude analysis)
 
 ## Quality Requirements
 
 - All workflows should use \`actions/github-script@v7\` for GitHub API interactions (if GitHub Actions)
 - Pin all action versions to specific SHAs or major versions for security
 - Include proper error handling and clear logging at each step
-- Set appropriate timeout-minutes for the workflow (5 minutes for triage)
+- Set appropriate timeout-minutes for the workflow (10 minutes for triage)
 - Use concurrency groups to prevent parallel runs on the same issue
 
 ## Output Format

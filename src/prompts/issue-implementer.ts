@@ -29,22 +29,30 @@ export function buildIssueImplementerPrompt(
 
 ### 1. ${prefs.ciProvider === 'github-actions' ? '.github/workflows/issue-implementer.yml' : prefs.ciProvider === 'gitlab-ci' ? '.gitlab/ci/issue-implementer.yml' : 'bitbucket-pipelines-issue-implementer.yml'}
 
-A CI workflow triggered when a new issue is opened or labeled with the trigger label \`agent:implement\`.
+A CI workflow triggered when a new issue is opened or labeled with the trigger label \`agent:implement\`, OR dispatched by the triage workflow.
 
-**Trigger**:
+**Trigger** (CRITICAL — dual trigger for event chaining):
 ${
   prefs.ciProvider === 'github-actions'
     ? `\`\`\`yaml
 on:
   issues:
     types: [opened, labeled]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Issue number to implement'
+        required: true
+        type: string
 \`\`\`
 
-The workflow must check that either:
-- The issue was just opened AND has the \`agent:implement\` label, OR
-- The \`agent:implement\` label was just added (labeled event)
+**IMPORTANT**: The \`workflow_dispatch\` trigger is required because GitHub Actions does NOT trigger \`labeled\` events from actions performed using the default \`GITHUB_TOKEN\`. When the triage workflow adds the \`agent:implement\` label, the \`labeled\` event is suppressed to prevent infinite loops. The triage workflow dispatches this workflow explicitly via \`gh workflow run\`.
 
-If neither condition is met, skip execution.`
+When triggered via \`workflow_dispatch\`:
+- \`github.event.issue\` and \`context.issue\` are NOT available
+- The workflow must fetch issue data via \`gh issue view <number> --json number,title,body,labels,user\`
+- All downstream steps must derive issue references from the guard output (not from context)
+- \`github.event.repository.default_branch\` is not available — use a fallback: \`github.event.repository.default_branch || 'main'\``
     : prefs.ciProvider === 'gitlab-ci'
       ? 'Trigger via webhook on issue creation or label change. Use a CI job that checks for the `agent:implement` label.'
       : 'Trigger via webhook on issue creation. Use a pipeline that checks for the `agent:implement` label.'
@@ -58,68 +66,83 @@ If neither condition is met, skip execution.`
 
 **Workflow steps**:
 
-1. **Gate check**:
-   - Verify the issue has the \`agent:implement\` label
-   - Skip if the issue already has a linked PR (check for \`<!-- issue-implementer: #<issue> -->\` marker in PR body)
-   - Skip if the issue has the \`agent:skip\` or \`wontfix\` label
-   - Post a comment on the issue: "🤖 Implementation agent starting..."
+1. **Fetch issue data** (workflow_dispatch only):
+   - When \`github.event_name == 'workflow_dispatch'\`, fetch the issue via:
+     \`\`\`bash
+     gh issue view "\${{ inputs.issue_number }}" --json number,title,body,labels,user
+     \`\`\`
+   - Store the result as a step output for the guard and prompt-building steps
 
-2. **Baseline validation**:
-   - Before creating a branch, run quality gates on the default branch HEAD to record the starting state:
-     - \`${detection.lintCommand ?? 'echo "no linter"'}\`
-     ${detection.typeChecker ? `- Type check: \`${detection.typeChecker === 'typescript' ? 'tsc --noEmit' : detection.typeChecker + ' --check .'}\`` : ''}
-     - \`${detection.testCommand ?? 'echo "no tests"'}\`
-   - Record which checks pass and which fail as the baseline
-   - If the baseline is already broken, note this in the issue comment and proceed — the agent must not introduce additional failures, but is not responsible for pre-existing ones
+2. **Gate check** (via guard script):
+   - Pass \`ISSUE_JSON\` from either the fetched data (workflow_dispatch) or \`toJSON(github.event.issue)\` (issues event)
+   - Verify the issue has the \`agent:implement\` label
+   - Skip if the issue already has a linked PR (check for \`<!-- issue-implementer: #<issue> -->\` marker in issue comments)
+   - Skip if the issue has blocking labels (\`agent:skip\`, \`wontfix\`, \`duplicate\`, \`invalid\`)
+   - Derive branch name from issue title
+   - **Output**: \`should-implement\`, \`branch\`, \`reason\`, \`issue-number\`, \`issue-title\` — all downstream steps reference the guard's outputs for issue data (NOT \`context.issue\` which is empty for workflow_dispatch)
+   - Post a comment on the issue: "Implementation agent starting..."
 
 3. **Branch creation**:
-   - Derive a branch name from the issue: \`cf/<slugified-issue-title>-<issue-number>\`
+   - Derive branch name from guard output: \`cf/<slugified-issue-title>-<issue-number>\`
    - Truncate the slug to keep branch name under 60 characters
-   - Create a new git worktree (or branch) from the default branch HEAD
+   - Delete stale remote branch if it exists (from a previous failed run)
+   - Create from \`origin/<default-branch>\` — use \`github.event.repository.default_branch || 'main'\` as fallback
 
-4. **Agent execution**:
-   - Invoke Claude Code using \`anthropics/claude-code-action@v1\` with \`claude_code_oauth_token: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\` (NOT \`ANTHROPIC_API_KEY\`)
-   - Pass the implementer prompt and full issue body via the action's \`prompt\` input
-   - The agent reads CLAUDE.md and harness.config.json for project conventions
-   - Allow tools: Read, Write, Edit, Bash (with safety constraints), Glob, Grep
-   - Set a timeout of ${prefs.strictnessLevel === 'strict' ? '30' : prefs.strictnessLevel === 'standard' ? '45' : '60'} minutes
-
-5. **Quality gate loop** (detect → remediate → re-validate):
-   - After the agent finishes, run all quality gates:
+4. **Baseline validation**:
+   - Before invoking the agent, run quality gates on the branch HEAD to record the starting state:
      - \`${detection.lintCommand ?? 'echo "no linter"'}\`
      ${detection.typeChecker ? `- Type check: \`${detection.typeChecker === 'typescript' ? 'tsc --noEmit' : detection.typeChecker + ' --check .'}\`` : ''}
      - \`${detection.testCommand ?? 'echo "no tests"'}\`
      ${detection.buildCommand ? `- Build: \`${detection.buildCommand}\`` : ''}
-   - If any gate fails, do NOT stop — invoke the agent again with the specific failure output and ask it to diagnose and fix the root cause
-   - Re-validate after each fix attempt
-   - Allow up to ${prefs.strictnessLevel === 'strict' ? '2' : prefs.strictnessLevel === 'standard' ? '3' : '5'} remediation attempts before escalating
-   - Each remediation attempt should fix a concrete failure, not retry blindly
+   - Record which checks pass and which fail as the baseline
+   - The agent must not introduce regressions — if a check was passing at baseline, it must still pass after changes
 
-6. **PR creation**:
-   - Commit all changes with: \`feat: implement #<issue-number> — <issue-title>\`
+5. **Build implementation prompt**:
+   - Read the implementer prompt from \`.codefactory/prompts/issue-implementer.md\`
+   - Parse \`ISSUE_JSON\` (from fetched data or event payload) to extract issue fields
+   - Combine: prompt template + issue details + CLAUDE.md conventions + harness config + baseline state
+   - For workflow_dispatch: use \`(issue.user || {}).login || 'unknown'\` for safe author access
+
+6. **Agent execution**:
+   - Invoke Claude Code using \`anthropics/claude-code-action@v1\` with \`claude_code_oauth_token: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\` (NOT \`ANTHROPIC_API_KEY\`)
+   - Pass the built prompt via the action's \`prompt\` input
+   - The agent reads CLAUDE.md and harness.config.json for project conventions
+   - Set \`--max-turns 100\` in \`claude_args\`
+   - Set a timeout of ${prefs.strictnessLevel === 'strict' ? '30' : prefs.strictnessLevel === 'standard' ? '45' : '60'} minutes
+
+7. **Post-implementation checks**:
+   - Check for file changes (both modified and new files)
+   - If no changes, log notice and skip PR creation
+   - Verify no protected files were modified: \`.github/workflows/*\`, \`harness.config.json\`, \`CLAUDE.md\`, lock files
+   - If protected files were touched, revert them via \`git checkout -- <file>\`
+
+8. **Quality gates** (regression-only):
+   - Run all quality gates: lint, type-check, test, build
+   - Compare against baseline — only FAIL on regressions (a check that was passing but now fails)
+   - If a check was already failing at baseline, a continued failure is NOT a regression
+
+9. **PR creation**:
+   - Stage all changes, commit: \`feat: implement #<issue-number> — <issue-title>\`
    - Push the branch
    - Create a pull request:
-     - Title: the issue title
-     - Body: summary of changes + baseline validation results + \`Closes #<issue-number>\` + \`<!-- issue-implementer: #<issue-number> -->\`
-     - Labels: \`agent-pr\`, plus the issue's labels
-     - Link the PR to the issue
-   - Comment on the issue: "✅ PR created: #<pr-number>"
+     - Title: \`feat: <issue-title>\`
+     - Body: summary + quality gates table + \`Closes #<issue-number>\` + \`<!-- issue-implementer: #<issue-number> -->\`
+     - Labels: \`agent-pr\`
+   - Comment on the issue: "PR created: <pr-url>"
 
-7. **Escalation (judgment required only)**:
-   - Escalate to human ONLY when a genuine judgment call is required:
-     - A security decision with meaningful risk implications (e.g., auth flow changes, secret handling)
-     - A Tier 3 (critical path) file was modified and requires mandatory human sign-off
-     - All remediation attempts are exhausted and the failure cannot be diagnosed or the correct fix is ambiguous
-   - When escalating: post a structured comment with exactly what was tried, what specific failure remains, and what decision is needed from a human
-   - Add the \`agent:needs-judgment\` label (not a generic failure label) to signal this is a deliberate escalation
-   - Never escalate on ordinary lint, type, or test failures — these are diagnosable and fixable autonomously
+10. **Escalation (failure handler)**:
+   - If any step fails and the guard approved implementation:
+     - Add the \`agent:needs-judgment\` label (create if it doesn't exist)
+     - Post a comment with the branch name and run link for debugging
 
 **Concurrency**: Use a concurrency group keyed on the issue number to prevent duplicate runs:
 \`\`\`yaml
 concurrency:
-  group: issue-implementer-$\{{ github.event.issue.number }}
-  cancel-in-progress: true
+  group: issue-implementer-$\{{ github.event.issue.number || inputs.issue_number }}
+  cancel-in-progress: false
 \`\`\`
+
+Note: \`cancel-in-progress: false\` — implementation runs should complete rather than be cancelled.
 
 **Strictness behavior**:
 ${prefs.strictnessLevel === 'strict' ? '- Agent must pass ALL quality gates (lint, type-check, test, build) before creating a PR\n- If any Tier 3 (critical path) file is modified, add the `needs-human-review` label to the PR and escalate for sign-off\n- Maximum 2 remediation attempts in the quality gate loop before escalating' : prefs.strictnessLevel === 'standard' ? '- Agent must pass lint and type-check gates. Test failures enter the detect→remediate loop.\n- Modified critical paths get flagged in the PR description\n- Maximum 3 remediation attempts in the quality gate loop before escalating' : '- Agent runs quality gates but can create a PR with documented warnings if gates cannot be resolved\n- Failures are recorded in the PR description with diagnosis notes\n- Maximum 5 remediation attempts in the quality gate loop before escalating'}
@@ -128,18 +151,27 @@ ${prefs.strictnessLevel === 'strict' ? '- Agent must pass ALL quality gates (lin
 
 The implementer agent's instructions are stored at \`.codefactory/prompts/issue-implementer.md\` in the repository. This file is managed by the CodeFactory CLI and can be customized by the team.
 
-**The workflow must read this file at runtime** and pass its contents to Claude as the system prompt. For example in a GitHub Actions step:
+**The workflow must read this file at runtime** and pass its contents to Claude as the system prompt. Use a multi-line HEREDOC output pattern:
 \`\`\`yaml
 - name: Read implementer prompt
-  id: prompt
-  run: echo "content=$(cat .codefactory/prompts/issue-implementer.md)" >> "$GITHUB_OUTPUT"
+  id: prompt-file
+  run: |
+    if [[ -f ".codefactory/prompts/issue-implementer.md" ]]; then
+      {
+        echo "content<<PROMPT_EOF"
+        cat .codefactory/prompts/issue-implementer.md
+        echo "PROMPT_EOF"
+      } >> "$GITHUB_OUTPUT"
+    else
+      echo "content=Implement the feature or fix described in the issue." >> "$GITHUB_OUTPUT"
+    fi
 \`\`\`
 
 Do NOT generate a separate \`scripts/issue-implementer-prompt.md\` file. The prompt lives in \`.codefactory/prompts/issue-implementer.md\` and is the single source of truth.
 
 ### 3. scripts/issue-implementer-guard.ts
 
-A utility script that determines whether the implementer agent should run:
+A TypeScript utility script that determines whether the implementer agent should run:
 
 \`\`\`typescript
 interface ImplementerDecision {
@@ -154,12 +186,15 @@ interface ImplementerDecision {
 \`\`\`
 
 The script:
-- Reads the issue event payload
-- Checks for the \`agent:implement\` label
+- Uses shebang: \`#!/usr/bin/env npx tsx\`
+- Reads the issue payload from \`ISSUE_JSON\` environment variable
+- Exports public functions: \`slugify()\`, \`deriveBranchName()\`, \`findExistingPR()\`, \`evaluate()\`
+- Supports \`--evaluate\` CLI mode (outputs JSON decision) and \`--self-test\` mode (runs built-in assertions)
+- Checks for the \`agent:implement\` label (required)
 - Checks for blocking labels (\`agent:skip\`, \`wontfix\`, \`duplicate\`, \`invalid\`)
-- Searches for existing PRs linked to this issue (via the marker comment)
-- Derives the branch name from the issue title
-- Returns a JSON decision object for the workflow to consume
+- Searches for existing PRs linked to this issue (via \`<!-- issue-implementer: #N -->\` marker in issue comments, using \`gh issue view\`)
+- Derives the branch name: \`cf/<slug>-<number>\`, max 60 chars
+- Returns a JSON decision object with issueNumber and issueTitle (used by downstream steps)
 
 ## Safety Constraints
 
