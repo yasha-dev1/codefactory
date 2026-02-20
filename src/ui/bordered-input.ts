@@ -96,10 +96,24 @@ const _borderedInput = createPrompt<string, BorderedInputConfig>((config, done) 
     suggestionContent = '\n' + lines.join('\n');
   }
 
-  return [
-    top + '\n' + b('\u2502 ') + value,
-    bottom + (hint ? '\n' + hint : '') + suggestionContent,
-  ];
+  // Wrap value text so it stays inside the bordered box
+  const wrapWidth = cols;
+  const wrappedLines: string[] = [];
+  if (value.length === 0) {
+    wrappedLines.push('');
+  } else {
+    for (let i = 0; i < value.length; i += wrapWidth) {
+      wrappedLines.push(value.slice(i, i + wrapWidth));
+    }
+  }
+
+  const allButLast = wrappedLines.slice(0, -1);
+  const lastLine = wrappedLines[wrappedLines.length - 1] ?? '';
+  const prefixContent = allButLast.map((line) => b('\u2502 ') + line).join('\n');
+  const lastLineContent = b('\u2502 ') + lastLine;
+  const content = prefixContent ? prefixContent + '\n' + lastLineContent : lastLineContent;
+
+  return [top + '\n' + content, bottom + (hint ? '\n' + hint : '') + suggestionContent];
 });
 
 export function borderedInput(config: BorderedInputConfig): Promise<string> {
