@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import chalk from 'chalk';
+import { z } from 'zod';
 
 import { logger } from '../ui/logger.js';
 import { printBanner } from '../ui/banner.js';
@@ -25,11 +26,24 @@ type ReplAction =
   | { type: 'command'; name: string }
   | { type: 'task'; task: string };
 
-interface PackageScripts {
-  test?: string;
-  build?: string;
-  lint?: string;
-  typecheck?: string;
+const packageJsonSchema = z.object({
+  scripts: z
+    .object({
+      test: z.string().optional(),
+      build: z.string().optional(),
+      lint: z.string().optional(),
+      typecheck: z.string().optional(),
+    })
+    .optional(),
+});
+
+/**
+ * Escape a string for safe embedding in a single-quoted bash string.
+ * Wraps the value in single quotes, escaping any embedded single quotes
+ * so that command substitution ($(), backticks) cannot fire.
+ */
+function shellEscape(s: string): string {
+  return "'" + s.replace(/'/g, "'\\''") + "'";
 }
 
 async function extractHarnessCommands(
@@ -39,8 +53,9 @@ async function extractHarnessCommands(
   if (!raw) return null;
 
   try {
-    const pkg = JSON.parse(raw) as { scripts?: PackageScripts };
-    const s = pkg.scripts;
+    const parsed = packageJsonSchema.safeParse(JSON.parse(raw));
+    if (!parsed.success) return null;
+    const s = parsed.data.scripts;
     if (!s) return null;
 
     return {
@@ -206,8 +221,8 @@ async function handleTask(task: string, repoRoot: string, store: PromptStore): P
     launcherFile,
     [
       '#!/bin/bash',
-      `PROMPT=$(<"${promptFile}")`,
-      `TASK=$(<"${taskFile}")`,
+      `PROMPT=$(<${shellEscape(promptFile)})`,
+      `TASK=$(<${shellEscape(taskFile)})`,
       'exec claude --dangerously-skip-permissions --append-system-prompt "$PROMPT" "$TASK"',
       '',
     ].join('\n'),
@@ -215,7 +230,7 @@ async function handleTask(task: string, repoRoot: string, store: PromptStore): P
   );
   await chmod(launcherFile, 0o755);
 
-  await openInNewTerminal(`bash "${launcherFile}"`, worktree.path);
+  await openInNewTerminal(`bash ${shellEscape(launcherFile)}`, worktree.path);
 
   console.log();
   logger.success('Claude opened in new terminal.');

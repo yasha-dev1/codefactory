@@ -100,13 +100,23 @@ vi.mock('../../src/core/terminal.js', () => ({
 }));
 
 import { exec } from 'node:child_process';
-import { isGitRepo, getRepoRoot } from '../../src/utils/git.js';
+import { writeFile } from 'node:fs/promises';
+import { isGitRepo, getRepoRoot, hasUncommittedChanges } from '../../src/utils/git.js';
+import { inputPrompt, confirmPrompt } from '../../src/ui/prompts.js';
 import { replCommand } from '../../src/commands/repl.js';
 import { NotAGitRepoError, ClaudeNotFoundError } from '../../src/utils/errors.js';
+import { createWorktree } from '../../src/core/worktree.js';
+import { openInNewTerminal } from '../../src/core/terminal.js';
 
 const mockedExec = vi.mocked(exec);
 const mockedIsGitRepo = vi.mocked(isGitRepo);
 const mockedGetRepoRoot = vi.mocked(getRepoRoot);
+const mockedHasUncommittedChanges = vi.mocked(hasUncommittedChanges);
+const mockedInputPrompt = vi.mocked(inputPrompt);
+const mockedConfirmPrompt = vi.mocked(confirmPrompt);
+const mockedCreateWorktree = vi.mocked(createWorktree);
+const mockedOpenInNewTerminal = vi.mocked(openInNewTerminal);
+const mockedWriteFile = vi.mocked(writeFile);
 
 describe('replCommand', () => {
   let exitSpy: ReturnType<typeof vi.spyOn>;
@@ -146,42 +156,141 @@ describe('replCommand', () => {
     await expect(replCommand()).rejects.toThrow(ClaudeNotFoundError);
   });
 
-  it('should initialize PromptStore on start', async () => {
+  /**
+   * Helper: configure mocks so replCommand gets past startup checks
+   * and enters the main loop. borderedInput must be configured by each test.
+   */
+  function setupReplStartup(repoRoot = '/fake/repo'): void {
     mockedIsGitRepo.mockResolvedValue(true);
-    mockedGetRepoRoot.mockResolvedValue('/fake/repo');
-
-    // exec succeeds (claude is installed)
+    mockedGetRepoRoot.mockResolvedValue(repoRoot);
     mockedExec.mockImplementation(
       (_cmd: string, cb: (err: Error | null, result?: unknown) => void) => {
         cb(null, { stdout: '/usr/bin/claude', stderr: '' });
         return undefined as unknown as ReturnType<typeof execType>;
       },
     );
+  }
 
-    // Simulate user pressing Ctrl+C on the search prompt.
-    // The REPL catches errors where `error.constructor.name === 'ExitPromptError'`
-    // and calls `process.exit(0)`, which our spy converts into a thrown Error.
-    class ExitPromptError extends Error {
-      constructor() {
-        super('exit');
-        this.name = 'ExitPromptError';
-        Object.defineProperty(this.constructor, 'name', { value: 'ExitPromptError' });
-      }
-    }
+  /** Throw ExitPromptError to break out of the REPL loop. */
+  function makeExitPromptError(): Error {
+    const err = new Error('exit');
+    err.name = 'ExitPromptError';
+    Object.defineProperty(err.constructor, 'name', { value: 'ExitPromptError' });
+    return err;
+  }
 
-    mockedBorderedInput.mockRejectedValueOnce(new ExitPromptError());
+  it('should initialize PromptStore on start', async () => {
+    setupReplStartup();
+    mockedBorderedInput.mockRejectedValueOnce(makeExitPromptError());
 
-    // replCommand will call process.exit(0) when it catches ExitPromptError,
-    // which our spy converts into a thrown Error('process.exit').
     await expect(replCommand()).rejects.toThrow('process.exit');
 
-    // Verify PromptStore was constructed with the repo root
     expect(MockPromptStore).toHaveBeenCalledWith('/fake/repo');
-
-    // Verify ensureDefaults was called to initialize prompt files
     expect(mockPromptStoreInstance.ensureDefaults).toHaveBeenCalledOnce();
-
-    // Verify process.exit was called with 0 (clean exit on Ctrl+C)
     expect(exitSpy).toHaveBeenCalledWith(0);
+  });
+
+  it('should write shell-escaped paths in launcher script (happy path)', async () => {
+    setupReplStartup();
+    mockedHasUncommittedChanges.mockResolvedValue(false);
+    mockedInputPrompt.mockResolvedValue('feat/my-feature');
+    mockedConfirmPrompt.mockResolvedValue(true);
+    mockedCreateWorktree.mockResolvedValue({
+      path: '/tmp/worktrees/feat/my-feature',
+      branchName: 'feat/my-feature',
+    });
+    mockPromptStoreInstance.read.mockResolvedValue('system prompt {{branchName}} {{qualityGates}}');
+    mockedOpenInNewTerminal.mockResolvedValue(undefined);
+
+    // First call returns a task, second call exits
+    mockedBorderedInput.mockResolvedValueOnce('implement login page');
+    mockedBorderedInput.mockRejectedValueOnce(makeExitPromptError());
+
+    await expect(replCommand()).rejects.toThrow('process.exit');
+
+    // Verify writeFile was called for the launcher script (3rd call: prompt, task, launcher)
+    const writeFileCalls = mockedWriteFile.mock.calls;
+    const launcherCall = writeFileCalls.find(
+      (call) => typeof call[0] === 'string' && (call[0] as string).endsWith('launch.sh'),
+    );
+    expect(launcherCall).toBeDefined();
+
+    const scriptContent = launcherCall![1] as string;
+    // Paths must be single-quoted to prevent command injection
+    expect(scriptContent).toContain(
+      "PROMPT=$(<'/tmp/worktrees/feat/my-feature/.codefactory/system-prompt')",
+    );
+    expect(scriptContent).toContain("TASK=$(<'/tmp/worktrees/feat/my-feature/.codefactory/task')");
+
+    // Verify openInNewTerminal was called with single-quoted launcher path
+    expect(mockedOpenInNewTerminal).toHaveBeenCalledWith(
+      "bash '/tmp/worktrees/feat/my-feature/.codefactory/launch.sh'",
+      '/tmp/worktrees/feat/my-feature',
+    );
+  });
+
+  it('should escape paths with special characters to prevent command injection', async () => {
+    setupReplStartup();
+    mockedHasUncommittedChanges.mockResolvedValue(false);
+    mockedInputPrompt.mockResolvedValue('feat/$(malicious-cmd)');
+    mockedConfirmPrompt.mockResolvedValue(true);
+    mockedCreateWorktree.mockResolvedValue({
+      path: '/tmp/worktrees/feat/$(malicious-cmd)',
+      branchName: 'feat/$(malicious-cmd)',
+    });
+    mockPromptStoreInstance.read.mockResolvedValue('system prompt {{branchName}}');
+    mockedOpenInNewTerminal.mockResolvedValue(undefined);
+
+    mockedBorderedInput.mockResolvedValueOnce('exploit test');
+    mockedBorderedInput.mockRejectedValueOnce(makeExitPromptError());
+
+    await expect(replCommand()).rejects.toThrow('process.exit');
+
+    const writeFileCalls = mockedWriteFile.mock.calls;
+    const launcherCall = writeFileCalls.find(
+      (call) => typeof call[0] === 'string' && (call[0] as string).endsWith('launch.sh'),
+    );
+    expect(launcherCall).toBeDefined();
+
+    const scriptContent = launcherCall![1] as string;
+    // Single quotes prevent $(malicious-cmd) from being expanded by bash
+    expect(scriptContent).toContain(
+      "PROMPT=$(<'/tmp/worktrees/feat/$(malicious-cmd)/.codefactory/system-prompt')",
+    );
+    expect(scriptContent).toContain(
+      "TASK=$(<'/tmp/worktrees/feat/$(malicious-cmd)/.codefactory/task')",
+    );
+    // Must NOT contain double-quoted paths that would allow expansion
+    expect(scriptContent).not.toMatch(/PROMPT=\$\(<"/);
+    expect(scriptContent).not.toMatch(/TASK=\$\(<"/);
+  });
+
+  it('should escape paths containing single quotes', async () => {
+    setupReplStartup();
+    mockedHasUncommittedChanges.mockResolvedValue(false);
+    mockedInputPrompt.mockResolvedValue("feat/it's-a-test");
+    mockedConfirmPrompt.mockResolvedValue(true);
+    mockedCreateWorktree.mockResolvedValue({
+      path: "/tmp/worktrees/feat/it's-a-test",
+      branchName: "feat/it's-a-test",
+    });
+    mockPromptStoreInstance.read.mockResolvedValue('system prompt');
+    mockedOpenInNewTerminal.mockResolvedValue(undefined);
+
+    mockedBorderedInput.mockResolvedValueOnce('quote test');
+    mockedBorderedInput.mockRejectedValueOnce(makeExitPromptError());
+
+    await expect(replCommand()).rejects.toThrow('process.exit');
+
+    const writeFileCalls = mockedWriteFile.mock.calls;
+    const launcherCall = writeFileCalls.find(
+      (call) => typeof call[0] === 'string' && (call[0] as string).endsWith('launch.sh'),
+    );
+    expect(launcherCall).toBeDefined();
+
+    const scriptContent = launcherCall![1] as string;
+    // Single quotes in path must be escaped as '\'' so the overall single-quoted
+    // string remains valid bash
+    expect(scriptContent).toContain("it'\\''s-a-test");
   });
 });
