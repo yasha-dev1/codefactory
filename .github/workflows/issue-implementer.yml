@@ -411,6 +411,9 @@ jobs:
 
           git push -u origin "${BRANCH}"
 
+          # Ensure agent-pr label exists
+          gh label create "agent-pr" --color "BFD4F2" --description "PR created by implementation agent" 2>/dev/null || true
+
           # Create PR
           PR_URL=$(gh pr create \
             --base "${DEFAULT_BRANCH}" \
