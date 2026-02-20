@@ -101,9 +101,10 @@ When triggered via \`workflow_dispatch\`:
    - Set \`allowed_bots: 'github-actions'\` — this workflow is dispatched by the triage workflow using \`GITHUB_TOKEN\`, so the actor is \`github-actions[bot]\`. Without \`allowed_bots\`, the action rejects bot-initiated runs.
    - The agent reads the codebase (read-only) and produces a structured plan
    - Timeout: 15 minutes
+   - **IMPORTANT**: The action does NOT have a \`result\` output. Claude's response is in the \`execution_file\` output (JSONL). Extract it with: \`jq -s -r '[.[] | select(.type == "assistant") | (.message.content // [])[] | select(.type == "text") | .text] | last // ""' "$EXECUTION_FILE"\`
 
 6. **Post plan as comment**:
-   - Post Claude's plan output as a comment on the issue
+   - Extract Claude's plan text from the \`execution_file\` (see above) and post as a comment on the issue
    - Include \`<!-- issue-planner: #N -->\` marker for deduplication
 
 7. **Add \`agent:implement\` label and dispatch implementer**:

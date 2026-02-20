@@ -179,15 +179,53 @@ jobs:
           claude_args: '--model claude-opus-4-6 --max-turns 30 --allowedTools "Read,Glob,Grep,Bash"'
           allowed_bots: 'github-actions'
 
+      - name: Extract plan from execution file
+        if: steps.guard.outputs.should-plan == 'true'
+        id: extract-plan
+        env:
+          EXECUTION_FILE: ${{ steps.claude-plan.outputs.execution_file }}
+        run: |
+          if [[ -z "$EXECUTION_FILE" || ! -f "$EXECUTION_FILE" ]]; then
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No execution file available"
+            exit 0
+          fi
+
+          echo "Execution file: ${EXECUTION_FILE} ($(wc -c < "$EXECUTION_FILE") bytes)"
+
+          # The execution file is JSONL from Claude Code SDK.
+          # Slurp into array, find assistant messages, extract last text content.
+          PLAN_TEXT=$(jq -s -r '
+            [.[] | select(.type == "assistant") |
+             (.message.content // [])[] | select(.type == "text") | .text
+            ] | last // ""
+          ' "$EXECUTION_FILE" 2>/dev/null || echo "")
+
+          if [[ -z "$PLAN_TEXT" || "$PLAN_TEXT" == "null" ]]; then
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Could not extract plan text from execution file"
+          else
+            PLAN_TEXT="${PLAN_TEXT:0:60000}"
+            {
+              echo "plan<<PLAN_EOF"
+              echo "$PLAN_TEXT"
+              echo "PLAN_EOF"
+            } >> "$GITHUB_OUTPUT"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "✔ Extracted plan ($(echo "$PLAN_TEXT" | wc -c) chars)"
+          fi
+
       - name: Post plan comment and dispatch implementer
         if: steps.guard.outputs.should-plan == 'true'
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         env:
-          CLAUDE_OUTPUT: ${{ steps.claude-plan.outputs.result || '' }}
+          PLAN_TEXT: ${{ steps.extract-plan.outputs.plan || '' }}
+          PLAN_FOUND: ${{ steps.extract-plan.outputs.found || 'false' }}
         with:
           script: |
             const issueNumber = parseInt('${{ steps.guard.outputs.issue-number }}', 10);
-            const planOutput = process.env.CLAUDE_OUTPUT || '*No plan output received.*';
+            const planFound = process.env.PLAN_FOUND === 'true';
+            const planOutput = (planFound && process.env.PLAN_TEXT) ? process.env.PLAN_TEXT : '*No plan output received.*';
 
             // Post plan comment with marker
             await github.rest.issues.createComment({

@@ -132,16 +132,33 @@ Do NOT generate a separate \`scripts/review-prompt.md\` file. The prompt lives i
 
 The review agent workflow should use \`anthropics/claude-code-action@v1\` with \`claude_code_oauth_token: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\` for authentication. Do NOT use \`ANTHROPIC_API_KEY\`.
 
-Example of invoking Claude Code via the action:
+**IMPORTANT — Extracting Claude's response**: The action does NOT have a \`result\` output. Claude's response is available via the \`execution_file\` output (a JSONL file containing all SDK messages). To extract the text:
 \`\`\`yaml
 - name: Run Claude review
+  id: review
   uses: anthropics/claude-code-action@v1
   with:
     claude_code_oauth_token: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
     prompt: |
       Review this pull request for bugs, security issues, and architectural violations.
-    claude_args: '--max-turns 3'
+    claude_args: '--max-turns 100 --allowedTools "Read,Glob,Grep,Bash"'
+    allowed_bots: 'github-actions,implementer-bot'
+
+- name: Extract review from execution file
+  id: extract
+  env:
+    EXECUTION_FILE: \${{ steps.review.outputs.execution_file }}
+  run: |
+    REVIEW_TEXT=$(jq -s -r '[.[] | select(.type == "assistant") | (.message.content // [])[] | select(.type == "text") | .text] | last // ""' "$EXECUTION_FILE" 2>/dev/null || echo "")
+    if [[ -n "$REVIEW_TEXT" && "$REVIEW_TEXT" != "null" ]]; then
+      { echo "review<<REVIEW_EOF"; echo "$REVIEW_TEXT"; echo "REVIEW_EOF"; } >> "$GITHUB_OUTPUT"
+      echo "found=true" >> "$GITHUB_OUTPUT"
+    else
+      echo "found=false" >> "$GITHUB_OUTPUT"
+    fi
 \`\`\`
+
+The available action outputs are: \`execution_file\`, \`structured_output\` (only with \`--json-schema\`), \`session_id\`, \`branch_name\`. There is NO \`result\` output.
 
 ## SHA Discipline
 
