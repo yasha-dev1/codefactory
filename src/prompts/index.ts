@@ -14,6 +14,7 @@ export { buildGarbageCollectionPrompt } from './garbage-collection.js';
 export { buildArchitecturalLintersPrompt } from './architectural-linters.js';
 export { buildIncidentHarnessLoopPrompt } from './incident-harness-loop.js';
 export { buildIssueImplementerPrompt } from './issue-implementer.js';
+export { buildIssueTriagePrompt } from './issue-triage.js';
 
 export { buildAgentSystemPrompt } from './agent-system.js';
 export type { AgentSystemPromptOptions } from './agent-system.js';

@@ -13,6 +13,7 @@ import { prTemplatesHarness } from './pr-templates.js';
 import { architecturalLintersHarness } from './architectural-linters.js';
 import { garbageCollectionHarness } from './garbage-collection.js';
 import { incidentHarnessLoopHarness } from './incident-harness-loop.js';
+import { issueTriageHarness } from './issue-triage.js';
 import { issueImplementerHarness } from './issue-implementer.js';
 
 const allHarnesses: HarnessModule[] = [
@@ -29,6 +30,7 @@ const allHarnesses: HarnessModule[] = [
   architecturalLintersHarness,
   garbageCollectionHarness,
   incidentHarnessLoopHarness,
+  issueTriageHarness,
   issueImplementerHarness,
 ];
 

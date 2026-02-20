@@ -109,53 +109,18 @@ concurrency:
 **Strictness behavior**:
 ${prefs.strictnessLevel === 'strict' ? '- Agent must pass ALL quality gates (lint, type-check, test, build) before creating a PR\n- If any critical path (Tier 3) is modified, add the `needs-human-review` label to the PR\n- Maximum 1 retry attempt on gate failure' : prefs.strictnessLevel === 'standard' ? '- Agent must pass lint and type-check gates. Test failures trigger a retry.\n- Modified critical paths get flagged in the PR description\n- Maximum 2 retry attempts on gate failure' : '- Agent should attempt quality gates but can create a PR with warnings\n- Failures are noted in the PR description rather than blocking\n- Maximum 3 retry attempts on gate failure'}
 
-### 2. scripts/issue-implementer-prompt.md
+### 2. Implementer prompt
 
-A pinned markdown prompt that the implementer agent uses as its system context:
+The implementer agent's instructions are stored at \`.codefactory/prompts/issue-implementer.md\` in the repository. This file is managed by the CodeFactory CLI and can be customized by the team.
 
-\`\`\`markdown
-# Issue Implementer Agent Instructions
-
-You are an implementation agent. Your task is to implement a feature or fix described in a GitHub issue.
-
-## Rules
-
-1. **Read first**: Before writing any code, read CLAUDE.md for project conventions and harness.config.json for architectural boundaries.
-2. **Understand the issue**: Parse the issue title and body to understand what needs to be built. If the issue includes acceptance criteria, treat them as your definition of done.
-3. **Plan before coding**: Think through the implementation approach. Identify which files need to change and what new files are needed.
-4. **Follow conventions**: Match the existing code style, naming conventions, import patterns, and architectural boundaries.
-5. **Write tests**: Add or update tests for your changes. Follow the existing test patterns in the project.
-6. **Minimal scope**: Implement ONLY what the issue asks for. Do not refactor unrelated code, add extra features, or "improve" things not mentioned.
-7. **Quality gates**: Run all quality gates before finishing:
-   - Lint: \`${detection.lintCommand ?? 'check package.json'}\`
-   - Type check: \`${detection.typeChecker ? (detection.typeChecker === 'typescript' ? 'tsc --noEmit' : detection.typeChecker + ' --check .') : 'N/A'}\`
-   - Test: \`${detection.testCommand ?? 'check package.json'}\`
-   ${detection.buildCommand ? `- Build: \`${detection.buildCommand}\`` : ''}
-8. **Commit discipline**: Use conventional commits. Make atomic commits as you work.
-
-## Files You Must Never Modify
-
-- CI/CD workflow files (.github/workflows/*, .gitlab-ci.yml, etc.)
-- harness.config.json
-- CLAUDE.md
-- Lock files (package-lock.json, yarn.lock, poetry.lock, etc.)
-
-## Architecture Boundaries
-
-${detection.architecturalLayers.length > 0 ? `This project has these layers: ${detection.architecturalLayers.join(', ')}. Respect import boundaries between layers.` : 'Check harness.config.json for architectural boundary rules.'}
-
-## Critical Paths
-
-${detection.criticalPaths.length > 0 ? `These paths are Tier 3 (critical) and require extra care and test coverage:\n${detection.criticalPaths.map((p) => `- \`${p}\``).join('\n')}` : 'Check harness.config.json for critical path definitions.'}
-
-## Output
-
-When finished, provide a summary:
-- Files created
-- Files modified
-- Tests added/updated
-- Quality gate results (pass/fail for each)
+**The workflow must read this file at runtime** and pass its contents to Claude as the system prompt. For example in a GitHub Actions step:
+\`\`\`yaml
+- name: Read implementer prompt
+  id: prompt
+  run: echo "content=$(cat .codefactory/prompts/issue-implementer.md)" >> "$GITHUB_OUTPUT"
 \`\`\`
+
+Do NOT generate a separate \`scripts/issue-implementer-prompt.md\` file. The prompt lives in \`.codefactory/prompts/issue-implementer.md\` and is the single source of truth.
 
 ### 3. scripts/issue-implementer-guard.ts
 

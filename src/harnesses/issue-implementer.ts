@@ -6,7 +6,7 @@ export const issueImplementerHarness: HarnessModule = {
   name: 'issue-implementer',
   displayName: 'Issue Implementer Agent',
   description: 'Generates a workflow that spawns an AI agent to implement new issues automatically',
-  order: 14,
+  order: 15,
 
   isApplicable(): boolean {
     return true;
@@ -26,9 +26,9 @@ export const issueImplementerHarness: HarnessModule = {
         metadata: {
           targetFiles: [
             '.github/workflows/issue-implementer.yml',
-            'scripts/issue-implementer-prompt.md',
             'scripts/issue-implementer-guard.ts',
           ],
+          promptFile: '.codefactory/prompts/issue-implementer.md',
         },
       };
 

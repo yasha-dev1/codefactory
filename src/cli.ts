@@ -8,10 +8,9 @@ export const program = new Command()
   .name('codefactory')
   .description(pkg.description)
   .version(pkg.version)
-  .argument('[task]', 'Task description (skips interactive prompt if provided)')
-  .action(async (task?: string) => {
-    const { runCommand } = await import('./commands/run.js');
-    await runCommand({ task });
+  .action(async () => {
+    const { replCommand } = await import('./commands/repl.js');
+    await replCommand();
   });
 
 program

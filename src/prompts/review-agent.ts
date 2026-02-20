@@ -3,10 +3,7 @@ import type { DetectionResult, UserPreferences } from './types.js';
 /**
  * Prompt for generating the review agent workflow and supporting scripts.
  */
-export function buildReviewAgentPrompt(
-  detection: DetectionResult,
-  prefs: UserPreferences,
-): string {
+export function buildReviewAgentPrompt(detection: DetectionResult, prefs: UserPreferences): string {
   return `Generate a review agent integration system for this ${detection.primaryLanguage} project. The review agent uses Claude to automatically review pull requests, provide structured feedback, and track review state with SHA deduplication.
 
 ## Detected Stack Context
@@ -52,9 +49,13 @@ A CI workflow triggered on pull_request events (opened, synchronize). It must:
 
 **Strictness behavior:**
 - \`${prefs.strictnessLevel}\` mode:
-${prefs.strictnessLevel === 'relaxed' ? '  - Focus only on bugs and security issues\n  - Suggestions are informational, not blocking' :
-  prefs.strictnessLevel === 'standard' ? '  - Include style, architecture, and test coverage feedback\n  - Blocking findings require fix before merge' :
-  '  - Comprehensive review covering all categories\n  - Any warning-level finding blocks merge\n  - Require explicit test coverage for every changed function'}
+${
+  prefs.strictnessLevel === 'relaxed'
+    ? '  - Focus only on bugs and security issues\n  - Suggestions are informational, not blocking'
+    : prefs.strictnessLevel === 'standard'
+      ? '  - Include style, architecture, and test coverage feedback\n  - Blocking findings require fix before merge'
+      : '  - Comprehensive review covering all categories\n  - Any warning-level finding blocks merge\n  - Require explicit test coverage for every changed function'
+}
 
 ### 2. ${prefs.ciProvider === 'github-actions' ? '.github/workflows/review-agent-rerun.yml' : 'CI review rerun workflow'}
 
@@ -116,30 +117,20 @@ Shared utility functions for review agent workflows:
 - \`getLatestReviewRunForSha(owner: string, repo: string, sha: string): Promise<CheckRun | null>\` — fetch the latest review agent check run for a specific SHA
 - \`getHeadSha(): string\` — get the current PR head SHA from CI environment
 
-### 5. Review Agent Prompt (embedded in workflow or scripts/review-prompt.md)
+### 5. Review Agent Prompt
 
-The actual prompt sent to Claude for the code review. It must instruct Claude to:
+The review agent's instructions are stored at \`.codefactory/prompts/review-agent.md\` in the repository. This file is managed by the CodeFactory CLI and can be customized by the team.
 
-- Act as a senior engineer reviewing the PR for correctness, security, and architecture
-- Focus on substance over style (the linter handles style)
-- Reference this project's specific conventions from CLAUDE.md
-- Classify findings by severity:
-  - **Blocking**: Must fix before merge (security issues, bugs, data loss risks)
-  - **Warning**: Should fix (architectural violations, missing tests, error handling gaps)
-  - **Suggestion**: Nice to have (performance improvements, cleaner patterns)
+**The workflow must read this file at runtime** and pass its contents to Claude as the system prompt. For example in a GitHub Actions step:
+\`\`\`yaml
+- name: Read review prompt
+  id: prompt
+  run: echo "content=$(cat .codefactory/prompts/review-agent.md)" >> "$GITHUB_OUTPUT"
+\`\`\`
 
-- For ${detection.primaryLanguage} specifically:
-${detection.primaryLanguage === 'typescript' || detection.primaryLanguage === 'javascript' ?
-  '  - Check for type safety issues (any usage, missing null checks, unchecked casts)\n  - Verify React hooks rules if applicable\n  - Check for proper error boundaries and async error handling' :
-detection.primaryLanguage === 'python' ?
-  '  - Check for type annotation completeness\n  - Verify proper exception handling (no bare except:)\n  - Check for SQL injection in ORM queries' :
-detection.primaryLanguage === 'go' ?
-  '  - Check for unhandled errors (err != nil patterns)\n  - Verify goroutine leak potential and proper context propagation\n  - Check for proper resource cleanup (defer)' :
-detection.primaryLanguage === 'rust' ?
-  '  - Check for unsafe block justification\n  - Verify proper error propagation with ? operator\n  - Check for potential panics in library code' :
-  '  - Check for language-specific anti-patterns\n  - Verify error handling completeness'}
+Do NOT generate a separate \`scripts/review-prompt.md\` file. The prompt lives in \`.codefactory/prompts/review-agent.md\` and is the single source of truth.
 
-- Output a structured JSON result that the workflow can parse for status reporting
+The review agent workflow should then use this prompt to instruct Claude to output a structured JSON result that the workflow can parse for status reporting.
 
 ## SHA Discipline
 

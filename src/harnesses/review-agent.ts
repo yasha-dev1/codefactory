@@ -5,8 +5,7 @@ import { buildSystemPrompt } from '../prompts/system.js';
 export const reviewAgentHarness: HarnessModule = {
   name: 'review-agent',
   displayName: 'Review Agent Integration',
-  description:
-    'Generates code review agent workflows with SHA-deduped reruns and auto-resolve',
+  description: 'Generates code review agent workflows with SHA-deduped reruns and auto-resolve',
   order: 7,
 
   isApplicable(): boolean {
@@ -29,6 +28,7 @@ export const reviewAgentHarness: HarnessModule = {
           rerunWorkflowPath: '.github/workflows/review-agent-rerun.yml',
           autoResolveWorkflowPath: '.github/workflows/auto-resolve-threads.yml',
           utilsPath: 'scripts/review-agent-utils.ts',
+          promptFile: '.codefactory/prompts/review-agent.md',
         },
       };
 
