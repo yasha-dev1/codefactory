@@ -23,6 +23,9 @@ export const claudeMdHarness: HarnessModule = {
         harnessName: 'claude-md',
         filesCreated: result.filesCreated,
         filesModified: result.filesModified,
+        metadata: {
+          targetFiles: ['CLAUDE.md', '.mcp.json'],
+        },
       };
 
       ctx.previousOutputs.set('claude-md', output);

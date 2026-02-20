@@ -51,13 +51,22 @@ ${
    - If attempts >= limit, post comment: "Remediation limit reached. Human review required." and exit
    - If any finding is security-related, skip remediation entirely
 
-2. **Context gathering**:
+2. **Baseline validation**:
    - Checkout the PR branch at HEAD
+   - Run quality gates and record which checks are currently passing and failing:
+     - \`${detection.lintCommand ?? 'echo "no linter"'}\`
+     ${detection.typeChecker ? `- Type check: \`${detection.typeChecker === 'typescript' ? 'tsc --noEmit' : detection.typeChecker + ' --check .'}\`` : ''}
+     - \`${detection.testCommand ?? 'echo "no tests"'}\`
+   - This baseline distinguishes pre-existing failures from failures introduced by the PR
+   - Record the baseline in the PR comment so reviewers can see the starting state
+   - Proceed with remediation regardless of baseline state — the agent must not introduce additional failures
+
+3. **Context gathering**:
    - Parse the review agent's comment to extract issues (file paths, line numbers, descriptions, severities)
    - Read CLAUDE.md for coding conventions
    - Read harness.config.json for project rules
 
-3. **Remediation execution**:
+4. **Remediation execution**:
    - Invoke Claude Code using \`anthropics/claude-code-action@v1\` with \`claude_code_oauth_token: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\` (NOT \`ANTHROPIC_API_KEY\`)
    - Pass the remediation prompt via the action's \`prompt\` input
    - The agent fixes ONLY the flagged issues — no refactoring, no improvements
@@ -67,14 +76,14 @@ ${
      - \`${detection.testCommand ?? 'echo "no tests"'}\`
    - If validation fails after a fix, revert that specific fix
 
-4. **Commit and push**:
+5. **Commit and push**:
    - Stage only the files modified by remediation
    - Commit: \`fix: [remediation] <brief description of fixes>\`
    - Include in commit body: which findings were fixed and which were skipped
    - Push to the PR branch
    - Add/increment the remediation attempt label
 
-5. **Trigger re-review**:
+6. **Trigger re-review**:
    - The push triggers the normal PR synchronize path
    - The rerun writer creates a re-review request for the new SHA
    - If all blocking issues are resolved, the review agent will APPROVE
