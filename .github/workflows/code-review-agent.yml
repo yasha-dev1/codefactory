@@ -142,10 +142,13 @@ jobs:
         if: steps.tier.outputs.tier != '1' && steps.dedup.outputs.skip != 'true'
         id: prompt-file
         run: |
-          if [[ -f "scripts/review-prompt.md" ]]; then
+          # Read from origin/main — not from the PR branch — so the prompt
+          # stays up-to-date even for PRs that don't include prompt changes.
+          PROMPT_CONTENT=$(git show origin/main:scripts/review-prompt.md 2>/dev/null || echo "")
+          if [[ -n "$PROMPT_CONTENT" ]]; then
             {
               echo "content<<PROMPT_EOF"
-              cat scripts/review-prompt.md
+              echo "$PROMPT_CONTENT"
               echo "PROMPT_EOF"
             } >> "$GITHUB_OUTPUT"
           else
@@ -324,7 +327,7 @@ jobs:
           claude_args: >-
             --model claude-haiku-4-5-20251001
             --max-turns 1
-            --json '{"type":"object","properties":{"verdict":{"type":"string","enum":["APPROVE","REQUEST_CHANGES","COMMENT"]},"reason":{"type":"string","description":"One sentence explaining the verdict"}},"required":["verdict","reason"]}'
+            --json-schema '{"type":"object","properties":{"verdict":{"type":"string","enum":["APPROVE","REQUEST_CHANGES","COMMENT"]},"reason":{"type":"string","description":"One sentence explaining the verdict"}},"required":["verdict","reason"]}'
           allowed_bots: 'github-actions,implementer-bot'
 
       - name: Extract verdict
