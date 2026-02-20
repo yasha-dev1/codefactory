@@ -190,8 +190,8 @@ async function handleTask(task: string, repoRoot: string, store: PromptStore): P
   const harnessCommands = await extractHarnessCommands(worktree.path);
   const qualityGates = buildQualityGates(harnessCommands);
   const systemPrompt = template
-    .replace(/\{\{branchName\}\}/g, branchName.trim())
-    .replace(/\{\{qualityGates\}\}/g, qualityGates);
+    .replace(/\{\{branchName\}\}/g, () => branchName.trim())
+    .replace(/\{\{qualityGates\}\}/g, () => qualityGates);
 
   // Write launcher files to worktree
   const cfDir = join(worktree.path, '.codefactory');

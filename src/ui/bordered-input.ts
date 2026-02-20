@@ -19,7 +19,7 @@ const _borderedInput = createPrompt<string, BorderedInputConfig>((config, done) 
       done(rl.line.trim());
       return;
     }
-    setValue(rl.line);
+    setValue(rl.line.trim());
   });
 
   const top = b('╭' + '─'.repeat(cols) + '╮');
