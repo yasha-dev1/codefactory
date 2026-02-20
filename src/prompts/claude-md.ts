@@ -4,10 +4,7 @@ import type { DetectionResult, UserPreferences } from './types.js';
  * Prompt for generating the CLAUDE.md agent instructions file.
  */
 export function buildClaudeMdPrompt(detection: DetectionResult, prefs: UserPreferences): string {
-  const criticalPaths = [
-    ...detection.criticalPaths,
-    ...(prefs.customCriticalPaths ?? []),
-  ];
+  const criticalPaths = [...detection.criticalPaths, ...(prefs.customCriticalPaths ?? [])];
 
   return `Generate a \`CLAUDE.md\` file for this repository. CLAUDE.md is the primary instruction file that AI coding agents (Claude Code, Cursor, etc.) read before making changes. It must be concise (~100 lines), authoritative, and contain everything an agent needs to work safely in this codebase.
 
@@ -33,7 +30,7 @@ export function buildClaudeMdPrompt(detection: DetectionResult, prefs: UserPrefe
 
 ## Critical Paths
 
-${criticalPaths.map(p => `- \`${p}\``).join('\n') || '- none detected'}
+${criticalPaths.map((p) => `- \`${p}\``).join('\n') || '- none detected'}
 
 ## CLAUDE.md Structure Requirements
 
@@ -76,13 +73,13 @@ Concise bullet list covering:
 
 ### 4. Architecture Overview
 Brief description of the project's architectural layers:
-${detection.architecturalLayers.map(l => `- **${l}**: Brief description of this layer's responsibility`).join('\n') || '- Describe the observed directory structure and its purpose'}
+${detection.architecturalLayers.map((l) => `- **${l}**: Brief description of this layer's responsibility`).join('\n') || '- Describe the observed directory structure and its purpose'}
 
 Include a one-line dependency rule: which layers can import from which.
 
 ### 5. Critical Paths — Extra Care Required
 List the critical paths that require heightened attention:
-${criticalPaths.map(p => `- \`${p}\``).join('\n') || '- none identified'}
+${criticalPaths.map((p) => `- \`${p}\``).join('\n') || '- none identified'}
 
 State that changes to these paths:
 - Require additional test coverage
@@ -110,6 +107,7 @@ Brief note that this project uses harness engineering:
 - CI gates enforce risk-appropriate checks on every PR
 - A review agent will automatically review PRs
 - Pre-commit hooks enforce local quality checks
+- **Chrome DevTools MCP**: A \`.mcp.json\` file at the project root configures \`@modelcontextprotocol/server-puppeteer\` so agents can drive the browser directly — navigate flows, capture screenshots, inspect the DOM, and validate UI behavior
 - See \`docs/architecture.md\` and \`docs/conventions.md\` for detailed guidelines
 
 ### 9. PR Conventions
@@ -118,7 +116,28 @@ Brief note that this project uses harness engineering:
 - PRs must pass all CI checks before merge
 - Fill out the PR template completely, including risk tier classification
 
+## Additional Output Files
+
+### \`.mcp.json\`
+
+Also generate a \`.mcp.json\` file at the project root. This file configures the Chrome DevTools MCP server so all Claude agents working in this repository can drive the browser directly for validation tasks.
+
+The file must contain exactly:
+\`\`\`json
+{
+  "mcpServers": {
+    "puppeteer": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-puppeteer"],
+      "env": {}
+    }
+  }
+}
+\`\`\`
+
+With this in place, agents can use \`mcp__puppeteer__*\` tools to: navigate to pages, capture screenshots, click elements, read the DOM, observe console errors, and validate UI behavior — all without manual browser setup.
+
 ## Output Format
 
-Return ONLY the complete markdown content for CLAUDE.md. Target approximately 100 lines. Be concise — every line should provide actionable information to an AI agent. Do not include meta-commentary or explanations outside the file content.`;
+Return the complete markdown content for CLAUDE.md followed by the \`.mcp.json\` content. Separate the two files with a comment line indicating the target file path, e.g. \`# file: .mcp.json\`. Target approximately 100 lines for CLAUDE.md. Be concise — every line should provide actionable information to an AI agent. Do not include meta-commentary or explanations outside the file content.`;
 }

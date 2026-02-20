@@ -64,41 +64,55 @@ If neither condition is met, skip execution.`
    - Skip if the issue has the \`agent:skip\` or \`wontfix\` label
    - Post a comment on the issue: "🤖 Implementation agent starting..."
 
-2. **Branch creation**:
+2. **Baseline validation**:
+   - Before creating a branch, run quality gates on the default branch HEAD to record the starting state:
+     - \`${detection.lintCommand ?? 'echo "no linter"'}\`
+     ${detection.typeChecker ? `- Type check: \`${detection.typeChecker === 'typescript' ? 'tsc --noEmit' : detection.typeChecker + ' --check .'}\`` : ''}
+     - \`${detection.testCommand ?? 'echo "no tests"'}\`
+   - Record which checks pass and which fail as the baseline
+   - If the baseline is already broken, note this in the issue comment and proceed — the agent must not introduce additional failures, but is not responsible for pre-existing ones
+
+3. **Branch creation**:
    - Derive a branch name from the issue: \`cf/<slugified-issue-title>-<issue-number>\`
    - Truncate the slug to keep branch name under 60 characters
    - Create a new git worktree (or branch) from the default branch HEAD
 
-3. **Agent execution**:
+4. **Agent execution**:
    - Invoke Claude Code using \`anthropics/claude-code-action@v1\` with \`claude_code_oauth_token: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\` (NOT \`ANTHROPIC_API_KEY\`)
    - Pass the implementer prompt and full issue body via the action's \`prompt\` input
    - The agent reads CLAUDE.md and harness.config.json for project conventions
    - Allow tools: Read, Write, Edit, Bash (with safety constraints), Glob, Grep
    - Set a timeout of ${prefs.strictnessLevel === 'strict' ? '30' : prefs.strictnessLevel === 'standard' ? '45' : '60'} minutes
 
-4. **Quality gates**:
-   - After the agent finishes, run validation:
+5. **Quality gate loop** (detect → remediate → re-validate):
+   - After the agent finishes, run all quality gates:
      - \`${detection.lintCommand ?? 'echo "no linter"'}\`
      ${detection.typeChecker ? `- Type check: \`${detection.typeChecker === 'typescript' ? 'tsc --noEmit' : detection.typeChecker + ' --check .'}\`` : ''}
      - \`${detection.testCommand ?? 'echo "no tests"'}\`
      ${detection.buildCommand ? `- Build: \`${detection.buildCommand}\`` : ''}
-   - If any gate fails, the agent gets one retry attempt to fix the failures
-   - If still failing after retry, post a comment on the issue with the failure details and add the \`agent:needs-help\` label
+   - If any gate fails, do NOT stop — invoke the agent again with the specific failure output and ask it to diagnose and fix the root cause
+   - Re-validate after each fix attempt
+   - Allow up to ${prefs.strictnessLevel === 'strict' ? '2' : prefs.strictnessLevel === 'standard' ? '3' : '5'} remediation attempts before escalating
+   - Each remediation attempt should fix a concrete failure, not retry blindly
 
-5. **PR creation**:
+6. **PR creation**:
    - Commit all changes with: \`feat: implement #<issue-number> — <issue-title>\`
    - Push the branch
    - Create a pull request:
      - Title: the issue title
-     - Body: summary of changes + \`Closes #<issue-number>\` + \`<!-- issue-implementer: #<issue-number> -->\`
+     - Body: summary of changes + baseline validation results + \`Closes #<issue-number>\` + \`<!-- issue-implementer: #<issue-number> -->\`
      - Labels: \`agent-pr\`, plus the issue's labels
      - Link the PR to the issue
    - Comment on the issue: "✅ PR created: #<pr-number>"
 
-6. **Failure handling**:
-   - If the agent crashes or times out, comment on the issue: "❌ Agent failed: <reason>"
-   - Add the \`agent:failed\` label to the issue
-   - Never leave the issue in an ambiguous state — always post a status comment
+7. **Escalation (judgment required only)**:
+   - Escalate to human ONLY when a genuine judgment call is required:
+     - A security decision with meaningful risk implications (e.g., auth flow changes, secret handling)
+     - A Tier 3 (critical path) file was modified and requires mandatory human sign-off
+     - All remediation attempts are exhausted and the failure cannot be diagnosed or the correct fix is ambiguous
+   - When escalating: post a structured comment with exactly what was tried, what specific failure remains, and what decision is needed from a human
+   - Add the \`agent:needs-judgment\` label (not a generic failure label) to signal this is a deliberate escalation
+   - Never escalate on ordinary lint, type, or test failures — these are diagnosable and fixable autonomously
 
 **Concurrency**: Use a concurrency group keyed on the issue number to prevent duplicate runs:
 \`\`\`yaml
@@ -108,7 +122,7 @@ concurrency:
 \`\`\`
 
 **Strictness behavior**:
-${prefs.strictnessLevel === 'strict' ? '- Agent must pass ALL quality gates (lint, type-check, test, build) before creating a PR\n- If any critical path (Tier 3) is modified, add the `needs-human-review` label to the PR\n- Maximum 1 retry attempt on gate failure' : prefs.strictnessLevel === 'standard' ? '- Agent must pass lint and type-check gates. Test failures trigger a retry.\n- Modified critical paths get flagged in the PR description\n- Maximum 2 retry attempts on gate failure' : '- Agent should attempt quality gates but can create a PR with warnings\n- Failures are noted in the PR description rather than blocking\n- Maximum 3 retry attempts on gate failure'}
+${prefs.strictnessLevel === 'strict' ? '- Agent must pass ALL quality gates (lint, type-check, test, build) before creating a PR\n- If any Tier 3 (critical path) file is modified, add the `needs-human-review` label to the PR and escalate for sign-off\n- Maximum 2 remediation attempts in the quality gate loop before escalating' : prefs.strictnessLevel === 'standard' ? '- Agent must pass lint and type-check gates. Test failures enter the detect→remediate loop.\n- Modified critical paths get flagged in the PR description\n- Maximum 3 remediation attempts in the quality gate loop before escalating' : '- Agent runs quality gates but can create a PR with documented warnings if gates cannot be resolved\n- Failures are recorded in the PR description with diagnosis notes\n- Maximum 5 remediation attempts in the quality gate loop before escalating'}
 
 ### 2. Implementer prompt
 

@@ -21,24 +21,24 @@ This project uses:
 
 ### 1. scripts/harness-ui-capture-browser-evidence.ts
 
-A TypeScript script that captures browser evidence for UI changes:
+A TypeScript script that captures browser evidence for UI changes.
 
-Purpose: Before submitting a PR that touches UI components, capture screenshots and interaction evidence proving the UI works correctly.
+Purpose: Before submitting a PR that touches UI components, capture screenshots and interaction evidence proving the UI works correctly. This script is designed to be driven by a Claude agent using the Chrome DevTools MCP server (\`@modelcontextprotocol/server-puppeteer\`, configured in \`.mcp.json\`). When running in agent context, the agent uses \`mcp__puppeteer__*\` tools directly; when running in CI as a standalone script, it falls back to the Puppeteer Node API.
 
 Implementation:
 1. Detect which UI flows need evidence based on changed files
-2. Launch a headless browser (Playwright if available, or puppeteer)
-3. For each required flow:
-   a. Navigate to the entrypoint URL
-   b. Capture a full-page screenshot
-   c. Capture any console errors/warnings
+2. For each required flow:
+   a. Navigate to the entrypoint URL (via MCP \`mcp__puppeteer__navigate\` or Puppeteer API)
+   b. Capture a full-page screenshot (via MCP \`mcp__puppeteer__screenshot\` or Puppeteer API)
+   c. Capture any console errors/warnings (via MCP \`mcp__puppeteer__evaluate\` or Puppeteer event listener)
    d. Record the navigation path and final URL
    e. If authentication required, use a test account (from env vars)
-4. Write an evidence manifest to \`.harness/evidence/manifest.json\`:
+3. Write an evidence manifest to \`.harness/evidence/manifest.json\`:
 \`\`\`json
 {
   "capturedAt": "ISO timestamp",
   "headSha": "current git SHA",
+  "captureMode": "mcp | puppeteer",
   "flows": [
     {
       "name": "flow-name",
@@ -52,13 +52,15 @@ Implementation:
   ]
 }
 \`\`\`
-5. Store screenshots in \`.harness/evidence/screenshots/\`
+4. Store screenshots in \`.harness/evidence/screenshots/\`
 
 The script should:
 - Accept \`--flows\` argument to specify which flows to capture (or "all")
 - Accept \`--base-url\` argument (default: http://localhost:3000)
 - Exit with non-zero if any flow fails to capture
 - Output a human-readable summary to stdout
+
+**Note**: When a Claude agent is running this validation directly (not via CI script), it should use the \`mcp__puppeteer__*\` tools from the project's \`.mcp.json\` configuration instead of spawning this script. The script exists for CI environments where an agent runtime is not present.
 
 ### 2. scripts/harness-ui-verify-browser-evidence.ts
 
