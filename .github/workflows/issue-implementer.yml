@@ -22,6 +22,7 @@ permissions:
   contents: write
   pull-requests: write
   issues: write
+  actions: write
   id-token: write
 
 concurrency:
@@ -377,6 +378,18 @@ jobs:
           NEW_SHA=$(git rev-parse HEAD)
           echo "new-sha=${NEW_SHA}" >> "$GITHUB_OUTPUT"
           echo "✔ Pushed review-fix commit: ${NEW_SHA:0:12}"
+
+      - name: Dispatch review agent for re-review
+        if: steps.mode.outputs.mode == 'review-fix' && steps.rf-push.outputs.new-sha
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          echo "Dispatching review agent for PR #${PR_NUMBER}..."
+          gh workflow run code-review-agent.yml \
+            --repo "${{ github.repository }}" \
+            --field pr_number="${PR_NUMBER}"
+          echo "✔ Dispatched code-review-agent.yml for re-review"
 
       - name: Review-fix failure handler
         if: failure() && steps.mode.outputs.mode == 'review-fix' && steps.rf-guard.outputs.should-fix == 'true'

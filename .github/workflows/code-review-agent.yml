@@ -3,6 +3,12 @@ name: Code Review Agent
 on:
   pull_request:
     types: [opened, synchronize]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to review (used after review-fix push)'
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -13,7 +19,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: review-agent-${{ github.event.pull_request.number }}
+  group: review-agent-${{ github.event.pull_request.number || inputs.pr_number }}
   cancel-in-progress: true
 
 jobs:
@@ -25,14 +31,39 @@ jobs:
       - name: Checkout at PR head SHA
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.head.sha || '' }}
           fetch-depth: 0
+
+      - name: Resolve PR context
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            PR_NUMBER="${{ inputs.pr_number }}"
+            PR_JSON=$(gh pr view "$PR_NUMBER" --json headRefOid,baseRefName,number)
+            HEAD_SHA=$(echo "$PR_JSON" | jq -r '.headRefOid')
+            BASE_REF=$(echo "$PR_JSON" | jq -r '.baseRefName')
+
+            # Re-checkout at the PR head SHA
+            git fetch origin "$HEAD_SHA"
+            git checkout "$HEAD_SHA"
+            echo "✔ Resolved PR #${PR_NUMBER} at ${HEAD_SHA:0:12} (workflow_dispatch)"
+          else
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+            BASE_REF="${{ github.event.pull_request.base.ref }}"
+            PR_NUMBER="${{ github.event.pull_request.number }}"
+          fi
+
+          echo "head-sha=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
+          echo "base-ref=${BASE_REF}" >> "$GITHUB_OUTPUT"
+          echo "pr-number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
 
       - name: Determine risk tier
         id: tier
         run: |
-          BASE_REF="${{ github.event.pull_request.base.ref }}"
-          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          BASE_REF="${{ steps.pr.outputs.base-ref }}"
+          HEAD_SHA="${{ steps.pr.outputs.head-sha }}"
 
           # Verify SHA discipline
           ACTUAL_SHA="$(git rev-parse HEAD)"
@@ -92,11 +123,14 @@ jobs:
         if: steps.tier.outputs.tier != '1'
         id: dedup
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          HEAD_SHA: ${{ steps.pr.outputs.head-sha }}
+          PR_NUMBER: ${{ steps.pr.outputs.pr-number }}
         with:
           script: |
-            const headSha = context.payload.pull_request.head.sha;
+            const headSha = process.env.HEAD_SHA;
             const marker = `<!-- harness-review: ${headSha} -->`;
-            const prNumber = context.payload.pull_request.number;
+            const prNumber = parseInt(process.env.PR_NUMBER, 10);
 
             core.info(`Checking for existing review of SHA ${headSha.slice(0, 12)}...`);
 
@@ -120,9 +154,11 @@ jobs:
         if: steps.tier.outputs.tier != '1' && steps.dedup.outputs.skip != 'true'
         id: check
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          HEAD_SHA: ${{ steps.pr.outputs.head-sha }}
         with:
           script: |
-            const headSha = context.payload.pull_request.head.sha;
+            const headSha = process.env.HEAD_SHA;
             const { data: checkRun } = await github.rest.checks.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -269,9 +305,12 @@ jobs:
           REVIEW_TEXT: ${{ steps.extract.outputs.review || '' }}
           REVIEW_FOUND: ${{ steps.extract.outputs.found || 'false' }}
           REVIEW_OUTCOME: ${{ steps.review.outcome }}
+          HEAD_SHA: ${{ steps.pr.outputs.head-sha }}
+          PR_NUMBER: ${{ steps.pr.outputs.pr-number }}
         with:
           script: |
-            const headSha = context.payload.pull_request.head.sha;
+            const headSha = process.env.HEAD_SHA;
+            const prNumber = parseInt(process.env.PR_NUMBER, 10);
             const marker = `<!-- harness-review: ${headSha} -->`;
             const tier = '${{ steps.tier.outputs.tier }}';
             const reviewText = process.env.REVIEW_TEXT || '';
@@ -301,7 +340,7 @@ jobs:
             const { data: comment } = await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.payload.pull_request.number,
+              issue_number: prNumber,
               body: sections.join('\n'),
             });
             core.setOutput('comment-id', comment.id);
@@ -452,10 +491,18 @@ jobs:
         if: steps.tier.outputs.tier != '1' && steps.dedup.outputs.skip != 'true' && steps.verdict.outputs.verdict == 'REQUEST_CHANGES'
         id: review-fix
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.pr-number }}
         with:
           script: |
-            const pr = context.payload.pull_request;
-            const prNumber = pr.number;
+            const prNumber = parseInt(process.env.PR_NUMBER, 10);
+
+            // Fetch fresh PR data (works for both pull_request and workflow_dispatch triggers)
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+            });
             const prLabels = pr.labels.map(l => l.name);
 
             // Only auto-fix agent-created PRs
@@ -507,9 +554,11 @@ jobs:
       - name: Escalate — max review-fix cycles
         if: steps.review-fix.outputs.escalate == 'true'
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.pr-number }}
         with:
           script: |
-            const prNumber = context.payload.pull_request.number;
+            const prNumber = parseInt(process.env.PR_NUMBER, 10);
 
             // Create label if it doesn't exist
             try {
@@ -550,7 +599,7 @@ jobs:
         if: steps.review-fix.outputs.eligible == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUM: ${{ github.event.pull_request.number }}
+          PR_NUM: ${{ steps.pr.outputs.pr-number }}
           CYCLE: ${{ steps.review-fix.outputs.cycle }}
         run: |
           echo "Dispatching implementer for review-fix: PR #${PR_NUM}, cycle ${CYCLE}"
@@ -563,9 +612,11 @@ jobs:
       - name: Report skip as success
         if: steps.tier.outputs.tier == '1' || steps.dedup.outputs.skip == 'true'
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          HEAD_SHA: ${{ steps.pr.outputs.head-sha }}
         with:
           script: |
-            const headSha = context.payload.pull_request.head.sha;
+            const headSha = process.env.HEAD_SHA;
             const tier = '${{ steps.tier.outputs.tier }}';
             const skipped = '${{ steps.dedup.outputs.skip }}' === 'true';
             const reason = tier === '1' ? 'Tier 1 — review not required' : `SHA ${headSha.slice(0, 12)} already reviewed`;
