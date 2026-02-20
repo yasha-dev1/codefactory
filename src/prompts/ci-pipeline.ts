@@ -7,13 +7,13 @@ export function buildCiPipelinePrompt(detection: DetectionResult, prefs: UserPre
   const ciFormat = {
     'github-actions': 'GitHub Actions YAML workflow files in `.github/workflows/`',
     'gitlab-ci': 'GitLab CI YAML in `.gitlab-ci.yml`',
-    'bitbucket': 'Bitbucket Pipelines YAML in `bitbucket-pipelines.yml`',
+    bitbucket: 'Bitbucket Pipelines YAML in `bitbucket-pipelines.yml`',
   }[prefs.ciProvider];
 
   const ciTrigger = {
     'github-actions': 'on: pull_request (for PR checks) and on: push to main (for post-merge)',
     'gitlab-ci': 'rules with merge_request_event and push to main',
-    'bitbucket': 'pull-requests and push triggers',
+    bitbucket: 'pull-requests and push triggers',
   }[prefs.ciProvider];
 
   const cacheStrategy = detection.packageManager
@@ -136,6 +136,28 @@ Validates the harness engineering setup itself:
 - ${cacheStrategy}
 - Upload test results and coverage as artifacts
 - For monorepo (${detection.monorepo}): use path filters to only run relevant jobs
+
+## Claude Code Integration (IMPORTANT)
+
+Any CI workflow that invokes Claude Code MUST use the \`anthropics/claude-code-action@v1\` GitHub Action with OAuth authentication. Do NOT use \`ANTHROPIC_API_KEY\` in any workflow.
+
+**Required pattern for all Claude-powered CI steps:**
+\`\`\`yaml
+permissions:
+  id-token: write  # Required for Claude Code Action OAuth
+  contents: read
+
+steps:
+  - uses: actions/checkout@v4
+  - name: Run Claude Code
+    uses: anthropics/claude-code-action@v1
+    with:
+      claude_code_oauth_token: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      prompt: 'Your task prompt here'
+      claude_args: '--max-turns 5'
+\`\`\`
+
+Never reference \`ANTHROPIC_API_KEY\` or invoke the \`claude\` CLI directly with API key authentication. Always use the action with \`claude_code_oauth_token\`.
 
 ## Output Format
 

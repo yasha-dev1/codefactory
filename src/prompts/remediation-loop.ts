@@ -32,11 +32,13 @@ A CI workflow that triggers automated code fixes when the review agent finds act
 - \`findings\`: JSON array of actionable review findings
 
 **Guard Rails** (critical for safety):
-${prefs.strictnessLevel === 'strict' ?
-  '- **Strict mode**: Only auto-fix lint and type errors. Logic fixes require human approval.\n- Maximum 3 remediation attempts per PR before requiring human intervention.\n- All remediation commits must include clear audit trail.' :
-prefs.strictnessLevel === 'standard' ?
-  '- **Standard mode**: Auto-fix lint, type, and simple logic errors (missing null checks, error handling).\n- Maximum 5 remediation attempts per PR.\n- Remediation commits are labeled with [remediation] prefix.' :
-  '- **Relaxed mode**: Auto-fix all types of issues the agent is confident about.\n- Maximum 10 remediation attempts per PR.'}
+${
+  prefs.strictnessLevel === 'strict'
+    ? '- **Strict mode**: Only auto-fix lint and type errors. Logic fixes require human approval.\n- Maximum 3 remediation attempts per PR before requiring human intervention.\n- All remediation commits must include clear audit trail.'
+    : prefs.strictnessLevel === 'standard'
+      ? '- **Standard mode**: Auto-fix lint, type, and simple logic errors (missing null checks, error handling).\n- Maximum 5 remediation attempts per PR.\n- Remediation commits are labeled with [remediation] prefix.'
+      : '- **Relaxed mode**: Auto-fix all types of issues the agent is confident about.\n- Maximum 10 remediation attempts per PR.'
+}
 - NEVER auto-remediate security findings — those always require human review
 - NEVER modify CI workflow files, harness.config.json, CLAUDE.md, or lock files
 - Track attempt count via PR labels (\`remediation-attempt-1\`, \`remediation-attempt-2\`, etc.)
@@ -56,7 +58,8 @@ prefs.strictnessLevel === 'standard' ?
    - Read harness.config.json for project rules
 
 3. **Remediation execution**:
-   - Invoke Claude Code with the remediation prompt (see below)
+   - Invoke Claude Code using \`anthropics/claude-code-action@v1\` with \`claude_code_oauth_token: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\` (NOT \`ANTHROPIC_API_KEY\`)
+   - Pass the remediation prompt via the action's \`prompt\` input
    - The agent fixes ONLY the flagged issues — no refactoring, no improvements
    - After each fix, run validation:
      - \`${detection.lintCommand ?? 'echo "no linter"'}\`
@@ -76,7 +79,7 @@ prefs.strictnessLevel === 'standard' ?
    - The rerun writer creates a re-review request for the new SHA
    - If all blocking issues are resolved, the review agent will APPROVE
 
-**Permissions**: contents: write, pull-requests: write
+**Permissions**: contents: write, pull-requests: write, id-token: write
 
 ### 2. scripts/remediation-agent-prompt.md
 

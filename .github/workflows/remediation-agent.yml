@@ -19,6 +19,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  id-token: write
 
 concurrency:
   group: remediation-${{ inputs.pr_number }}
@@ -152,6 +153,7 @@ jobs:
 
       - name: Build remediation prompt
         if: steps.guard.outputs.should-remediate == 'true'
+        id: build-prompt
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         env:
           FINDINGS_JSON: ${{ inputs.findings }}
@@ -204,48 +206,17 @@ jobs:
               '```',
             ].join('\n');
 
-            fs.writeFileSync('/tmp/remediation-prompt.txt', prompt);
-            core.info(`Prompt written (${prompt.length} chars)`);
+            core.setOutput('prompt', prompt);
+            core.info(`Prompt built (${prompt.length} chars)`);
 
       - name: Run Claude remediation
         if: steps.guard.outputs.should-remediate == 'true'
         id: claude
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          CLAUDE_CODE_ENTRYPOINT: ci-remediation
-        run: |
-          if [[ -z "${ANTHROPIC_API_KEY}" ]]; then
-            echo "::error::ANTHROPIC_API_KEY secret is not set."
-            exit 1
-          fi
-
-          set +e
-          OUTPUT=$(cat /tmp/remediation-prompt.txt | claude --max-turns 15 --output-format json -p - 2>&1)
-          EXIT_CODE=$?
-          set -e
-
-          echo "$OUTPUT" > /tmp/remediation-output.txt
-
-          if [[ $EXIT_CODE -ne 0 ]]; then
-            echo "::warning::Claude exited with code ${EXIT_CODE}"
-            echo "claude-ok=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "claude-ok=true" >> "$GITHUB_OUTPUT"
-          fi
-
-          # Extract the JSON summary from output
-          SUMMARY=$(echo "$OUTPUT" | node -e "
-            const input = require('fs').readFileSync(0, 'utf-8');
-            const match = input.match(/\{[\s\S]*\"fixed\"[\s\S]*\}/);
-            if (match) {
-              try { JSON.parse(match[0]); console.log(match[0]); }
-              catch { console.log('{}'); }
-            } else { console.log('{}'); }
-          " 2>/dev/null || echo '{}')
-
-          echo "summary<<SUMMARY_EOF" >> "$GITHUB_OUTPUT"
-          echo "$SUMMARY" >> "$GITHUB_OUTPUT"
-          echo "SUMMARY_EOF" >> "$GITHUB_OUTPUT"
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: ${{ steps.build-prompt.outputs.prompt }}
+          claude_args: '--max-turns 15'
 
       - name: Check for file changes
         if: steps.guard.outputs.should-remediate == 'true'
@@ -364,18 +335,15 @@ jobs:
 
           git add $MODIFIED
 
-          SUMMARY="${{ steps.claude.outputs.summary }}"
-          FIXED_COUNT=$(echo "$SUMMARY" | jq '.fixed | length' 2>/dev/null || echo "0")
-          SKIPPED_COUNT=$(echo "$SUMMARY" | jq '.skipped | length' 2>/dev/null || echo "0")
+          FILE_COUNT=$(echo "$MODIFIED" | wc -l | tr -d ' ')
 
           git commit -m "$(cat <<COMMIT_EOF
-          fix: [remediation] auto-fix ${FIXED_COUNT} review finding(s) (attempt ${ATTEMPT})
+          fix: [remediation] auto-fix review finding(s) (attempt ${ATTEMPT})
 
           Remediation agent auto-fix for PR #${{ inputs.pr_number }}.
           SHA: ${{ inputs.head_sha }}
 
-          Fixed: ${FIXED_COUNT} finding(s)
-          Skipped: ${SKIPPED_COUNT} finding(s)
+          Files modified: ${FILE_COUNT}
           Files: $(echo "$MODIFIED" | tr '\n' ', ')
           COMMIT_EOF
           )"
@@ -423,7 +391,6 @@ jobs:
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         env:
           GUARD_DECISION: ${{ steps.guard.outputs.decision }}
-          CLAUDE_SUMMARY: ${{ steps.claude.outputs.summary }}
           HAS_CHANGES: ${{ steps.changes.outputs.has-changes }}
           CHANGED_FILES: ${{ steps.changes.outputs.files }}
           VALIDATION_PASSED: ${{ steps.validation.outputs.passed }}
@@ -438,9 +405,6 @@ jobs:
             const headSha = '${{ inputs.head_sha }}';
             const attempt = process.env.ATTEMPT;
             const marker = `<!-- remediation-audit: ${headSha} -->`;
-
-            let summary;
-            try { summary = JSON.parse(process.env.CLAUDE_SUMMARY || '{}'); } catch { summary = {}; }
 
             const hasChanges = process.env.HAS_CHANGES === 'true';
             const validationPassed = process.env.VALIDATION_PASSED === 'true';
@@ -457,30 +421,12 @@ jobs:
                 ? 'Fixes Failed Validation'
                 : 'No Changes Made';
 
-            const fixed = summary.fixed || [];
-            const skipped = summary.skipped || [];
-
-            let fixedSection = '';
-            if (fixed.length > 0) {
-              fixedSection = [
-                '### Findings Fixed',
-                '',
-                '| File | Finding | Change |',
-                '|------|---------|--------|',
-                ...fixed.map((f) => `| \`${f.file}\` | ${f.finding} | ${f.change} |`),
-              ].join('\n');
-            }
-
-            let skippedSection = '';
-            if (skipped.length > 0) {
-              skippedSection = [
-                '### Findings Skipped',
-                '',
-                '| File | Finding | Reason |',
-                '|------|---------|--------|',
-                ...skipped.map((s) => `| \`${s.file}\` | ${s.finding} | ${s.reason} |`),
-              ].join('\n');
-            }
+            const changedFiles = (process.env.CHANGED_FILES || '').trim();
+            const filesSection = changedFiles ? [
+              '### Files Modified',
+              '',
+              ...changedFiles.split('\n').map((f) => `- \`${f}\``),
+            ].join('\n') : '';
 
             const validationSection = hasChanges ? [
               '### Validation',
@@ -500,8 +446,7 @@ jobs:
               `**Source SHA**: \`${headSha.slice(0, 12)}\``,
               newSha ? `**New SHA**: \`${newSha.slice(0, 12)}\`` : '',
               '',
-              fixedSection,
-              skippedSection,
+              filesSection,
               validationSection,
               '',
               '---',

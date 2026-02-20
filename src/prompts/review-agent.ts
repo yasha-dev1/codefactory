@@ -32,7 +32,7 @@ A CI workflow triggered on pull_request events (opened, synchronize). It must:
 - Post a structured review comment on the PR
 - Report a check run status (success/failure/neutral) tied to the head SHA
 
-**Permissions**: contents: read, pull-requests: write, checks: write
+**Permissions**: contents: read, pull-requests: write, checks: write, issues: read, id-token: write
 
 **SHA Deduplication**: Before running the full review, check if this SHA was already reviewed:
 - Search PR comments for the marker \`<!-- harness-review: <head-sha> -->\`
@@ -130,7 +130,18 @@ The review agent's instructions are stored at \`.codefactory/prompts/review-agen
 
 Do NOT generate a separate \`scripts/review-prompt.md\` file. The prompt lives in \`.codefactory/prompts/review-agent.md\` and is the single source of truth.
 
-The review agent workflow should then use this prompt to instruct Claude to output a structured JSON result that the workflow can parse for status reporting.
+The review agent workflow should use \`anthropics/claude-code-action@v1\` with \`claude_code_oauth_token: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\` for authentication. Do NOT use \`ANTHROPIC_API_KEY\`.
+
+Example of invoking Claude Code via the action:
+\`\`\`yaml
+- name: Run Claude review
+  uses: anthropics/claude-code-action@v1
+  with:
+    claude_code_oauth_token: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+    prompt: |
+      Review this pull request for bugs, security issues, and architectural violations.
+    claude_args: '--max-turns 3'
+\`\`\`
 
 ## SHA Discipline
 

@@ -54,6 +54,7 @@ If neither condition is met, skip execution.`
 - contents: write (to push branches)
 - pull-requests: write (to create PRs)
 - issues: write (to comment status updates on the issue)
+- id-token: write (required for Claude Code Action OAuth)
 
 **Workflow steps**:
 
@@ -69,8 +70,8 @@ If neither condition is met, skip execution.`
    - Create a new git worktree (or branch) from the default branch HEAD
 
 3. **Agent execution**:
-   - Invoke Claude Code with the implementer prompt (see below)
-   - Pass the full issue body as context
+   - Invoke Claude Code using \`anthropics/claude-code-action@v1\` with \`claude_code_oauth_token: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\` (NOT \`ANTHROPIC_API_KEY\`)
+   - Pass the implementer prompt and full issue body via the action's \`prompt\` input
    - The agent reads CLAUDE.md and harness.config.json for project conventions
    - Allow tools: Read, Write, Edit, Bash (with safety constraints), Glob, Grep
    - Set a timeout of ${prefs.strictnessLevel === 'strict' ? '30' : prefs.strictnessLevel === 'standard' ? '45' : '60'} minutes

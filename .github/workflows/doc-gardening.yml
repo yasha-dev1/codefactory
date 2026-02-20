@@ -8,6 +8,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  id-token: write
 
 concurrency:
   group: doc-gardening
@@ -33,35 +34,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Check API key
-        id: preflight
-        run: |
-          if [[ -z "${ANTHROPIC_API_KEY}" ]]; then
-            echo "::notice::ANTHROPIC_API_KEY is not set — skipping documentation gardening."
-            echo "has-key=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "has-key=true" >> "$GITHUB_OUTPUT"
-          fi
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-
       - name: Run documentation gardening agent
-        if: steps.preflight.outputs.has-key == 'true'
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          CLAUDE_CODE_ENTRYPOINT: ci-doc-gardening
-        run: |
-          set +e
-          cat scripts/doc-gardening-prompt.md | claude --max-turns 10 -p - 2>&1
-          EXIT_CODE=$?
-          set -e
-
-          if [[ $EXIT_CODE -ne 0 ]]; then
-            echo "::warning::Claude exited with code ${EXIT_CODE}"
-          fi
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: 'Read and follow the instructions in scripts/doc-gardening-prompt.md to perform documentation gardening on this repository.'
+          claude_args: '--max-turns 10'
 
       - name: Revert non-documentation changes
-        if: steps.preflight.outputs.has-key == 'true'
         id: safety
         run: |
           MODIFIED=$(git diff --name-only 2>/dev/null || echo "")

@@ -106,6 +106,35 @@ export async function initCommand(options: InitOptions): Promise<void> {
     ],
   );
 
+  // ── GitHub App installation check ────────────────────────────────────
+  if (ciProvider === 'github-actions') {
+    console.log();
+    logger.warn('CodeFactory generates CI workflows that use the Claude Code GitHub Action.');
+    logger.warn(
+      'These workflows require the Claude GitHub App to be installed on your repository.',
+    );
+    console.log();
+    logger.info("If you haven't already, run /install-github-app in Claude Code to set it up.");
+    logger.info(
+      'This ensures the CLAUDE_CODE_OAUTH_TOKEN secret is available for your CI workflows.',
+    );
+    console.log();
+
+    const hasGitHubApp = await confirmPrompt(
+      'Have you installed the Claude GitHub App on this repository?',
+      false,
+    );
+    if (!hasGitHubApp) {
+      logger.warn(
+        'Please run /install-github-app in Claude Code first, then re-run codefactory init.',
+      );
+      logger.dim(
+        '  Without the GitHub App, Claude-powered CI workflows (review agent, remediation, etc.) will not function.',
+      );
+      return;
+    }
+  }
+
   // Build harness selection list
   const tempCtx: HarnessContext = {
     repoRoot,

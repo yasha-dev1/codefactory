@@ -25,7 +25,9 @@ export function buildGarbageCollectionPrompt(
 
 A scheduled CI workflow that detects and fixes documentation drift:
 
-${prefs.ciProvider === 'github-actions' ? `\`\`\`yaml
+${
+  prefs.ciProvider === 'github-actions'
+    ? `\`\`\`yaml
 name: Documentation Gardening
 on:
   schedule:
@@ -35,6 +37,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  id-token: write
 
 jobs:
   gardening:
@@ -46,10 +49,11 @@ jobs:
       - name: Set up environment
         # Set up Node.js/Python/etc. as needed for the project
       - name: Run documentation gardening agent
-        env:
-          ANTHROPIC_API_KEY: \${{ secrets.ANTHROPIC_API_KEY }}
-        run: |
-          npx claude-code --print "$(cat scripts/doc-gardening-prompt.md)"
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: 'Read and follow the instructions in scripts/doc-gardening-prompt.md to perform documentation gardening on this repository.'
+          claude_args: '--max-turns 10'
       - name: Create PR if changes detected
         uses: peter-evans/create-pull-request@v6
         with:
@@ -71,7 +75,9 @@ jobs:
           commit-message: "docs: automated documentation gardening"
           labels: documentation, automated
           delete-branch: true
-\`\`\`` : `Provide an equivalent workflow configuration for ${prefs.ciProvider} that runs weekly and creates merge requests/PRs for documentation fixes.`}
+\`\`\``
+    : `Provide an equivalent workflow configuration for ${prefs.ciProvider} that runs weekly and creates merge requests/PRs for documentation fixes.`
+}
 
 **Workflow behavior:**
 - If no documentation changes are needed, the workflow succeeds without creating a PR
@@ -149,7 +155,8 @@ After making changes, provide a summary listing:
 - If many issues are found, prefer creating a single focused PR over multiple
 - The prompt must be specific enough to avoid false positives and unnecessary churn
 - Include a manual workflow_dispatch trigger for on-demand gardening
-- The workflow should gracefully handle the case where the ANTHROPIC_API_KEY secret is not set
+- The workflow must use \`anthropics/claude-code-action@v1\` with \`claude_code_oauth_token\` for authentication (NOT \`ANTHROPIC_API_KEY\`)
+- The workflow must include \`id-token: write\` in its permissions for the Claude Code Action OAuth flow
 
 ## Output Format
 

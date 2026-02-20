@@ -46,6 +46,7 @@ The workflow runs on every issue open and edit event. The guard script determine
 **Permissions** (${prefs.ciProvider === 'github-actions' ? 'GitHub Actions' : prefs.ciProvider}):
 - issues: write (to add labels and comments)
 - contents: read (to read repo context)
+- id-token: write (required for Claude Code Action OAuth)
 
 **Workflow steps**:
 
@@ -64,8 +65,8 @@ The workflow runs on every issue open and edit event. The guard script determine
      - \`needs-human-review\` (color: \`#fbca04\`) — issue needs manual assessment
 
 3. **Claude triage analysis**:
-   - Invoke Claude Code with the triage prompt (see below)
-   - Pass the full issue title and body as context
+   - Invoke Claude Code using \`anthropics/claude-code-action@v1\` with \`claude_code_oauth_token: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\` (NOT \`ANTHROPIC_API_KEY\`)
+   - Pass the triage prompt and full issue title/body via the action's \`prompt\` input
    - The agent evaluates the issue against quality criteria:
      - **Clear description**: Does the issue clearly describe what is needed?
      - **Reproducibility** (bugs): Are steps to reproduce provided?
