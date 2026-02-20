@@ -209,15 +209,16 @@ jobs:
             core.setOutput('missing-info', JSON.stringify(verdict.missingInfo || []));
             core.setOutput('suggested-labels', JSON.stringify(verdict.suggestedLabels || []));
 
-            const isBug = (verdict.suggestedLabels || []).some(
-              (l) => l === 'bug' || l === 'ui-bug' || l === 'visual-bug'
+            // Only flag UI/visual bugs for browser reproduction — CLI and backend bugs skip repro
+            const isUiBug = (verdict.suggestedLabels || []).some(
+              (l) => l === 'ui-bug' || l === 'visual-bug' || l === 'ui' || l === 'frontend-bug'
             );
-            core.setOutput('is-bug', String(isBug));
+            core.setOutput('is-bug', String(isUiBug));
             core.setOutput('reproduced', String(verdict.reproduced ?? false));
             core.setOutput('reproduction-notes', verdict.reproductionNotes || '');
             core.setOutput('raw-text', '');
 
-            core.info(`Verdict: actionable=${verdict.actionable}, confidence=${verdict.confidence}, complexity=${verdict.estimatedComplexity}, isBug=${isBug}`);
+            core.info(`Verdict: actionable=${verdict.actionable}, confidence=${verdict.confidence}, complexity=${verdict.estimatedComplexity}, isUiBug=${isUiBug}`);
 
       - name: Install Chromium dependencies
         if: steps.verdict.outputs.is-bug == 'true' && steps.verdict.outputs.actionable == 'true'
