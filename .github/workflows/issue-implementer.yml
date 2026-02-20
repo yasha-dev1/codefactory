@@ -48,7 +48,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           ISSUE_NUM="${{ inputs.issue_number }}"
-          ISSUE_DATA=$(gh issue view "$ISSUE_NUM" --json number,title,body,labels,user)
+          # gh CLI uses 'author' not 'user' — remap to match github.event.issue shape
+          ISSUE_DATA=$(gh issue view "$ISSUE_NUM" --json number,title,body,labels,author \
+            | jq '{number, title, body, labels, user: {login: .author.login, type: (if .author.is_bot then "Bot" else "User" end)}}')
           {
             echo "json<<ISSUE_EOF"
             echo "$ISSUE_DATA"
