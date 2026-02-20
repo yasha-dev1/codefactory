@@ -3,13 +3,19 @@ name: Risk Policy Gate
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to run risk gate for'
+        required: true
+        type: string
 
 permissions:
   contents: read
   pull-requests: read
 
 concurrency:
-  group: risk-gate-${{ github.event.pull_request.number }}
+  group: risk-gate-${{ github.event.pull_request.number || inputs.pr_number }}
   cancel-in-progress: true
 
 jobs:
@@ -28,18 +34,28 @@ jobs:
       docs-drift: ${{ steps.gate.outputs.docs-drift }}
       review-agent-status: ${{ steps.gate.outputs.review-agent-status }}
     steps:
+      - name: Resolve PR context
+        id: pr-context
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_JSON=$(gh pr view "${{ inputs.pr_number }}" --repo "${{ github.repository }}" --json headRefOid,baseRefName)
+          echo "head-sha=$(echo "$PR_JSON" | jq -r '.headRefOid')" >> "$GITHUB_OUTPUT"
+          echo "base-ref=$(echo "$PR_JSON" | jq -r '.baseRefName')" >> "$GITHUB_OUTPUT"
+
       - name: Checkout at PR head SHA
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ steps.pr-context.outputs.head-sha || github.event.pull_request.head.sha }}
           fetch-depth: 0
 
       - name: Run risk policy gate
         id: gate
         run: bash scripts/risk-policy-gate.sh
         env:
-          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          EXPECTED_SHA: ${{ steps.pr-context.outputs.head-sha || github.event.pull_request.head.sha }}
+          BASE_REF: ${{ steps.pr-context.outputs.base-ref || github.event.pull_request.base.ref }}
           STRICTNESS: relaxed
 
       - name: Annotate PR with tier

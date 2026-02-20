@@ -380,17 +380,18 @@ jobs:
           echo "new-sha=${NEW_SHA}" >> "$GITHUB_OUTPUT"
           echo "✔ Pushed review-fix commit: ${NEW_SHA:0:12}"
 
-      - name: Dispatch review agent for re-review
+      - name: Dispatch CI pipelines for re-review
         if: steps.mode.outputs.mode == 'review-fix' && steps.rf-push.outputs.new-sha
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ inputs.pr_number }}
+          REPO: ${{ github.repository }}
         run: |
-          echo "Dispatching review agent for PR #${PR_NUMBER}..."
-          gh workflow run code-review-agent.yml \
-            --repo "${{ github.repository }}" \
-            --field pr_number="${PR_NUMBER}"
-          echo "✔ Dispatched code-review-agent.yml for re-review"
+          echo "Dispatching all CI pipelines for PR #${PR_NUMBER}..."
+          gh workflow run ci.yml --repo "$REPO" --field pr_number="${PR_NUMBER}"
+          gh workflow run risk-policy-gate.yml --repo "$REPO" --field pr_number="${PR_NUMBER}"
+          gh workflow run code-review-agent.yml --repo "$REPO" --field pr_number="${PR_NUMBER}"
+          echo "✔ Dispatched CI + risk gate + review agent for re-review"
 
       - name: Review-fix failure handler
         if: failure() && steps.mode.outputs.mode == 'review-fix' && steps.rf-guard.outputs.should-fix == 'true'
@@ -880,6 +881,19 @@ jobs:
                 '*🤖 [Issue Implementer Agent](https://github.com/codefactory) — automated implementation.*',
               ].join('\n'),
             });
+
+      - name: Dispatch CI pipelines for new PR
+        if: steps.mode.outputs.mode == 'issue' && steps.pr.outputs.number
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUM: ${{ steps.pr.outputs.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          echo "Dispatching all CI pipelines for PR #${PR_NUM}..."
+          gh workflow run ci.yml --repo "$REPO" --field pr_number="${PR_NUM}"
+          gh workflow run risk-policy-gate.yml --repo "$REPO" --field pr_number="${PR_NUM}"
+          gh workflow run code-review-agent.yml --repo "$REPO" --field pr_number="${PR_NUM}"
+          echo "✔ Dispatched CI + risk gate + review agent for PR #${PR_NUM}"
 
       - name: Failure handler
         if: failure() && steps.mode.outputs.mode == 'issue' && steps.guard.outputs.should-implement == 'true'
