@@ -326,7 +326,7 @@ jobs:
             </review>
           claude_args: >-
             --model claude-haiku-4-5-20251001
-            --max-turns 1
+            --max-turns 3
             --json-schema '{"type":"object","properties":{"verdict":{"type":"string","enum":["APPROVE","REQUEST_CHANGES","COMMENT"]},"reason":{"type":"string","description":"One sentence explaining the verdict"}},"required":["verdict","reason"]}'
           allowed_bots: 'github-actions,implementer-bot'
 
