@@ -351,6 +351,71 @@ jobs:
 
           echo "Quality gates: lint=${LINT_OK}, typecheck=${TYPECHECK_OK}, test=${TEST_OK}, build=${BUILD_OK}"
 
+      - name: Review-fix quality gate failure
+        if: steps.mode.outputs.mode == 'review-fix' && steps.rf-changes.outputs.has-changes == 'true' && steps.rf-quality.outputs.passed != 'true'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+          CYCLE: ${{ steps.rf-guard.outputs.cycle }}
+          BRANCH: ${{ steps.rf-guard.outputs.branch }}
+          LINT: ${{ steps.rf-quality.outputs.lint }}
+          TYPECHECK: ${{ steps.rf-quality.outputs.typecheck }}
+          TEST: ${{ steps.rf-quality.outputs.test }}
+          BUILD: ${{ steps.rf-quality.outputs.build }}
+        with:
+          script: |
+            const prNumber = parseInt(process.env.PR_NUMBER, 10);
+            const cycle = process.env.CYCLE;
+            const branch = process.env.BRANCH;
+            const lint = process.env.LINT === 'true' ? '✅' : '❌';
+            const typecheck = process.env.TYPECHECK === 'true' ? '✅' : '❌';
+            const test = process.env.TEST === 'true' ? '✅' : '❌';
+            const build = process.env.BUILD === 'true' ? '✅' : '❌';
+
+            // Ensure label exists
+            try {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: 'agent:needs-judgment',
+                color: 'E4E669',
+                description: 'Agent needs human judgment to proceed',
+              });
+            } catch {}
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              labels: ['agent:needs-judgment'],
+            });
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body: [
+                `<!-- review-fix-quality-failed: cycle-${cycle} -->`,
+                `## ❌ Review-Fix Agent — Quality Gates Failed (Cycle ${cycle}/3)`,
+                '',
+                'The review-fix agent made changes but quality gates did not pass.',
+                'Changes were **not pushed**. A human should review and decide next steps.',
+                '',
+                '| Check | Result |',
+                '|-------|--------|',
+                `| Lint | ${lint} |`,
+                `| Type Check | ${typecheck} |`,
+                `| Tests | ${test} |`,
+                `| Build | ${build} |`,
+                '',
+                `**Branch**: \`${branch}\``,
+                `**Run**: [${context.runId}](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
+                '',
+                '---',
+                '*🤖 [Issue Implementer Agent](https://github.com/codefactory) — automated review-fix.*',
+              ].join('\n'),
+            });
+
       - name: Commit and push review-fix
         if: steps.mode.outputs.mode == 'review-fix' && steps.rf-changes.outputs.has-changes == 'true' && steps.rf-quality.outputs.passed == 'true'
         id: rf-push
