@@ -22,8 +22,8 @@ const { mockPromptStoreInstance, MockPromptStore } = vi.hoisted(() => {
   return { mockPromptStoreInstance, MockPromptStore };
 });
 
-const { mockedSearch } = vi.hoisted(() => ({
-  mockedSearch: vi.fn(),
+const { mockedBorderedInput } = vi.hoisted(() => ({
+  mockedBorderedInput: vi.fn(),
 }));
 
 // Mock all external dependencies BEFORE importing the module under test
@@ -53,8 +53,8 @@ vi.mock('../../src/ui/prompts.js', () => ({
   confirmPrompt: vi.fn(),
 }));
 
-vi.mock('@inquirer/prompts', () => ({
-  search: mockedSearch,
+vi.mock('../../src/ui/bordered-input.js', () => ({
+  borderedInput: mockedBorderedInput,
 }));
 
 vi.mock('../../src/utils/git.js', () => ({
@@ -169,7 +169,7 @@ describe('replCommand', () => {
       }
     }
 
-    mockedSearch.mockRejectedValueOnce(new ExitPromptError());
+    mockedBorderedInput.mockRejectedValueOnce(new ExitPromptError());
 
     // replCommand will call process.exit(0) when it catches ExitPromptError,
     // which our spy converts into a thrown Error('process.exit').

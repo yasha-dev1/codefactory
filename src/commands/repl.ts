@@ -4,12 +4,12 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import chalk from 'chalk';
-import { search } from '@inquirer/prompts';
 
 import { logger } from '../ui/logger.js';
 import { printBanner } from '../ui/banner.js';
 import { withSpinner } from '../ui/spinner.js';
 import { confirmPrompt, selectPrompt, inputPrompt } from '../ui/prompts.js';
+import { borderedInput } from '../ui/bordered-input.js';
 import { isGitRepo, getRepoRoot, hasUncommittedChanges } from '../utils/git.js';
 import { readFileIfExists } from '../utils/fs.js';
 import { NotAGitRepoError, ClaudeNotFoundError } from '../utils/errors.js';
@@ -252,55 +252,45 @@ export async function replCommand(): Promise<void> {
   // Main loop
   while (true) {
     try {
-      const action = await search<ReplAction>({
-        message: ' ',
-        theme: {
-          prefix: chalk.bold.hex(ACCENT)('❯'),
-          style: {
-            highlight: (text: string) => chalk.bold(text),
-            description: (text: string) => chalk.dim(text),
-            message: () => '',
-          },
-          helpMode: 'auto' as const,
-        },
-        source: async (term) => {
-          const input = term ?? '';
-
-          // Empty or just "/" — show all commands
-          if (input === '' || input === '/') {
-            return allCommands;
-          }
-
-          // Starts with "/" — filter commands
-          if (input.startsWith('/')) {
-            const filter = input.slice(1).toLowerCase();
-            return allCommands.filter((c) => c.name.slice(1).toLowerCase().includes(filter));
-          }
-
-          // Anything else — treat as a task
-          return [
-            {
-              name: `"${input}"`,
-              value: { type: 'task' as const, task: input },
-              description: 'Create worktree and launch Claude',
-            },
-          ];
-        },
+      const raw = await borderedInput({
+        hint: 'Type a task, or /command for saved prompts',
+        accentColor: ACCENT,
       });
 
-      if (action.type === 'prompt') {
-        await promptActions(store, action.name);
-      } else if (action.type === 'command') {
-        if (action.name === 'init') {
-          const { initCommand } = await import('./init.js');
-          await initCommand({});
-        } else if (action.name === 'help') {
-          showHelp();
-        } else if (action.name === 'exit') {
-          process.exit(0);
+      if (!raw) continue;
+
+      if (raw.startsWith('/')) {
+        // Filter commands by what was typed after "/"
+        const filter = raw.slice(1).toLowerCase();
+        const filtered = filter
+          ? allCommands.filter((c) => c.name.slice(1).toLowerCase().includes(filter))
+          : allCommands;
+
+        if (filtered.length === 0) {
+          logger.warn(`No command found for "${raw}"`);
+          console.log();
+          continue;
         }
-      } else if (action.type === 'task') {
-        await handleTask(action.task, repoRoot, store);
+
+        const action = await selectPrompt<ReplAction>(
+          'Select command:',
+          filtered.map((c) => ({ name: c.name, value: c.value })),
+        );
+
+        if (action.type === 'prompt') {
+          await promptActions(store, action.name);
+        } else if (action.type === 'command') {
+          if (action.name === 'init') {
+            const { initCommand } = await import('./init.js');
+            await initCommand({});
+          } else if (action.name === 'help') {
+            showHelp();
+          } else if (action.name === 'exit') {
+            process.exit(0);
+          }
+        }
+      } else {
+        await handleTask(raw, repoRoot, store);
       }
 
       console.log();
