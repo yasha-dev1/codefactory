@@ -3,6 +3,7 @@ import type { z } from 'zod';
 import chalk from 'chalk';
 
 import type { AIRunner, AIRunnerOptions, AIPlatform, GenerateResult } from './ai-runner.js';
+import { extractJson } from './ai-runner.js';
 
 export type { GenerateResult };
 
@@ -234,18 +235,4 @@ export class ClaudeRunner implements AIRunner {
       }
     }
   }
-}
-
-function extractJson(text: string): string {
-  const fenceMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
-  if (fenceMatch) {
-    return fenceMatch[1].trim();
-  }
-
-  const jsonMatch = text.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
-  if (jsonMatch) {
-    return jsonMatch[1].trim();
-  }
-
-  return text.trim();
 }

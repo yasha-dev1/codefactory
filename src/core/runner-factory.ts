@@ -8,7 +8,7 @@ import { PlatformCLINotFoundError } from '../utils/errors.js';
 
 const PLATFORM_BINARIES: Record<AIPlatform, string> = {
   claude: 'claude',
-  kiro: 'kiro',
+  kiro: 'kiro-cli',
   codex: 'codex',
 };
 

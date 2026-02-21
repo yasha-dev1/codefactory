@@ -1,4 +1,4 @@
-import { exec } from 'node:child_process';
+import { exec, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execAsync = promisify(exec);
@@ -39,4 +39,25 @@ export async function getHeadSha(dir?: string): Promise<string> {
 export async function hasUncommittedChanges(dir?: string): Promise<boolean> {
   const { stdout } = await execAsync('git status --porcelain', { cwd: dir });
   return stdout.trim().length > 0;
+}
+
+export function snapshotUntrackedFiles(cwd: string): Set<string> {
+  const output = execFileSync('git', ['ls-files', '--others', '--exclude-standard'], {
+    cwd,
+    encoding: 'utf-8',
+  });
+  return new Set(output.split('\n').filter(Boolean));
+}
+
+export function diffWorkingTree(
+  beforeUntracked: Set<string>,
+  cwd: string,
+): { created: string[]; modified: string[] } {
+  const diffOutput = execFileSync('git', ['diff', '--name-only'], { cwd, encoding: 'utf-8' });
+  const modified = diffOutput.split('\n').filter(Boolean);
+
+  const afterUntracked = snapshotUntrackedFiles(cwd);
+  const created = [...afterUntracked].filter((f) => !beforeUntracked.has(f));
+
+  return { created, modified };
 }

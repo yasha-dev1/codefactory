@@ -78,11 +78,11 @@ CodeFactory will:
 
 CodeFactory supports multiple AI coding agent platforms:
 
-| Platform         | Status      | CLI Binary | Instruction File |
-| ---------------- | ----------- | ---------- | ---------------- |
-| **Claude Code**  | Supported   | `claude`   | `CLAUDE.md`      |
-| **AWS Kiro**     | Coming soon | `kiro`     | `KIRO.md`        |
-| **OpenAI Codex** | Coming soon | `codex`    | `CODEX.md`       |
+| Platform         | Status    | CLI Binary | Instruction File |
+| ---------------- | --------- | ---------- | ---------------- |
+| **Claude Code**  | Supported | `claude`   | `CLAUDE.md`      |
+| **AWS Kiro**     | Supported | `kiro-cli` | `KIRO.md`        |
+| **OpenAI Codex** | Supported | `codex`    | `CODEX.md`       |
 
 During `codefactory init`, you select your AI platform. All generated artifacts (CI workflows, instruction files, harness checks) are automatically tailored to the selected platform.
 

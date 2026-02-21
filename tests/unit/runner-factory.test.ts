@@ -5,9 +5,13 @@ import { CodexRunner } from '../../src/core/codex-runner.js';
 import { PlatformCLINotFoundError } from '../../src/utils/errors.js';
 import { execFileSync } from 'node:child_process';
 
-vi.mock('node:child_process', () => ({
-  execFileSync: vi.fn(),
-}));
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...actual,
+    execFileSync: vi.fn(),
+  };
+});
 
 const mockedExecFileSync = vi.mocked(execFileSync);
 
@@ -59,7 +63,7 @@ describe('validatePlatformCLI', () => {
     });
 
     expect(() => validatePlatformCLI('kiro')).toThrow(PlatformCLINotFoundError);
-    expect(() => validatePlatformCLI('kiro')).toThrow('kiro CLI not found in PATH');
+    expect(() => validatePlatformCLI('kiro')).toThrow('kiro-cli CLI not found in PATH');
   });
 
   it('should include install instructions in error message', () => {
