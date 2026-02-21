@@ -16,6 +16,7 @@ import { incidentHarnessLoopHarness } from './incident-harness-loop.js';
 import { issueTriageHarness } from './issue-triage.js';
 import { issuePlannerHarness } from './issue-planner.js';
 import { issueImplementerHarness } from './issue-implementer.js';
+import { skillsInstallerHarness } from './skills-installer.js';
 
 const allHarnesses: HarnessModule[] = [
   riskContractHarness,
@@ -34,6 +35,7 @@ const allHarnesses: HarnessModule[] = [
   issueTriageHarness,
   issuePlannerHarness,
   issueImplementerHarness,
+  skillsInstallerHarness,
 ];
 
 export function getHarnessModules(): HarnessModule[] {
