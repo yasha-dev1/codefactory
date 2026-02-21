@@ -1,7 +1,7 @@
-import { join } from 'node:path';
-
 import type { HarnessModule, HarnessContext, HarnessOutput } from './types.js';
 import type { DetectionResult } from '../core/detector.js';
+import { buildIssuePlannerPrompt } from '../prompts/issue-planner.js';
+import { buildSystemPrompt } from '../prompts/system.js';
 
 export const issuePlannerHarness: HarnessModule = {
   name: 'issue-planner',
@@ -15,33 +15,54 @@ export const issuePlannerHarness: HarnessModule = {
   },
 
   async execute(ctx: HarnessContext): Promise<HarnessOutput> {
-    const snap = ctx.fileWriter.snapshot();
+    const { detection, userPreferences } = ctx;
 
-    await ctx.fileWriter.write(
-      join(ctx.repoRoot, '.github', 'workflows', 'issue-planner.yml'),
-      buildIssuePlannerWorkflowYml(ctx.detection),
-    );
+    // 1. Generate reference templates from existing builders
+    const refWorkflow = buildIssuePlannerWorkflowYml(detection);
+    const refGuard = buildIssuePlannerGuardTs();
+    const refPromptMd = buildIssuePlannerPromptMd();
 
-    await ctx.fileWriter.write(
-      join(ctx.repoRoot, 'scripts', 'issue-planner-guard.ts'),
-      buildIssuePlannerGuardTs(),
-    );
+    // 2. Build the prompt with reference context
+    const basePrompt = buildIssuePlannerPrompt(detection, userPreferences);
+    const prompt = `${basePrompt}
 
-    await ctx.fileWriter.write(
-      join(ctx.repoRoot, '.codefactory', 'prompts', 'issue-planner.md'),
-      buildIssuePlannerPromptMd(),
-    );
+## Reference Implementation
 
-    const diff = ctx.fileWriter.diffSince(snap);
-    const output: HarnessOutput = {
-      harnessName: 'issue-planner',
-      filesCreated: diff.created,
-      filesModified: diff.modified,
-    };
+Use these as your structural template. Keep the same patterns but customize all
+language setup, install commands, test/lint/build commands, and tooling for the
+detected stack.
 
-    ctx.previousOutputs.set('issue-planner', output);
+### Reference: .github/workflows/issue-planner.yml
+\`\`\`yaml
+${refWorkflow}
+\`\`\`
 
-    return output;
+### Reference: scripts/issue-planner-guard.ts
+\`\`\`typescript
+${refGuard}
+\`\`\`
+
+### Reference: .codefactory/prompts/issue-planner.md
+\`\`\`markdown
+${refPromptMd}
+\`\`\``;
+
+    // 3. Call Claude runner
+    const systemPrompt = buildSystemPrompt();
+    try {
+      const result = await ctx.runner.generate(prompt, systemPrompt);
+      const output: HarnessOutput = {
+        harnessName: 'issue-planner',
+        filesCreated: result.filesCreated,
+        filesModified: result.filesModified,
+        metadata: { workflowPath: '.github/workflows/issue-planner.yml' },
+      };
+      ctx.previousOutputs.set('issue-planner', output);
+      return output;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Issue planner generation failed: ${message}`);
+    }
   },
 };
 

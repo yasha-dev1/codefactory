@@ -1,6 +1,6 @@
-import { join } from 'node:path';
-
 import type { HarnessModule, HarnessContext, HarnessOutput } from './types.js';
+import { buildRiskPolicyGatePrompt } from '../prompts/risk-policy-gate.js';
+import { buildSystemPrompt } from '../prompts/system.js';
 
 export const riskPolicyGateHarness: HarnessModule = {
   name: 'risk-policy-gate',
@@ -13,8 +13,8 @@ export const riskPolicyGateHarness: HarnessModule = {
   },
 
   async execute(ctx: HarnessContext): Promise<HarnessOutput> {
-    const snap = ctx.fileWriter.snapshot();
-    const d = ctx.detection;
+    const { detection, userPreferences } = ctx;
+    const d = detection;
 
     // ── Build tier patterns from detection ──────────────────────────────
     const tier3Patterns =
@@ -53,39 +53,52 @@ export const riskPolicyGateHarness: HarnessModule = {
     const lintCmd = d.lintCommand ?? 'npm run lint';
     const buildCmd = d.buildCommand ?? 'npm run build';
 
-    // ── 1. Shell script (near-verbatim) ─────────────────────────────────
-    await ctx.fileWriter.write(
-      join(ctx.repoRoot, 'scripts/risk-policy-gate.sh'),
-      buildShellScript(),
-    );
+    // 1. Generate reference templates from existing builders
+    const refShellScript = buildShellScript();
+    const refTsScript = buildTsScript(tier2Patterns, tier3Patterns);
+    const refWorkflow = buildWorkflowYaml(testCmd, lintCmd, buildCmd);
 
-    // ── 2. TypeScript script (with detection-derived patterns) ──────────
-    await ctx.fileWriter.write(
-      join(ctx.repoRoot, 'scripts/risk-policy-gate.ts'),
-      buildTsScript(tier2Patterns, tier3Patterns),
-    );
+    // 2. Build the prompt with reference context
+    const basePrompt = buildRiskPolicyGatePrompt(detection, userPreferences);
+    const prompt = `${basePrompt}
 
-    // ── 3. Workflow YAML (near-verbatim, with command substitution) ─────
-    await ctx.fileWriter.write(
-      join(ctx.repoRoot, '.github/workflows/risk-policy-gate.yml'),
-      buildWorkflowYaml(testCmd, lintCmd, buildCmd),
-    );
+## Reference Implementation
 
-    const diff = ctx.fileWriter.diffSince(snap);
+Use these as your structural template. Keep the same patterns but customize all
+language setup, install commands, test/lint/build commands, and tooling for the
+detected stack.
 
-    const output: HarnessOutput = {
-      harnessName: 'risk-policy-gate',
-      filesCreated: diff.created,
-      filesModified: diff.modified,
-      metadata: {
-        workflowPath: '.github/workflows/risk-policy-gate.yml',
-        scriptPath: 'scripts/risk-policy-gate.ts',
-      },
-    };
+### Reference: scripts/risk-policy-gate.sh
+\`\`\`bash
+${refShellScript}
+\`\`\`
 
-    ctx.previousOutputs.set('risk-policy-gate', output);
+### Reference: scripts/risk-policy-gate.ts
+\`\`\`typescript
+${refTsScript}
+\`\`\`
 
-    return output;
+### Reference: .github/workflows/risk-policy-gate.yml
+\`\`\`yaml
+${refWorkflow}
+\`\`\``;
+
+    // 3. Call Claude runner
+    const systemPrompt = buildSystemPrompt();
+    try {
+      const result = await ctx.runner.generate(prompt, systemPrompt);
+      const output: HarnessOutput = {
+        harnessName: 'risk-policy-gate',
+        filesCreated: result.filesCreated,
+        filesModified: result.filesModified,
+        metadata: { gatePath: 'scripts/risk-policy-gate.sh' },
+      };
+      ctx.previousOutputs.set('risk-policy-gate', output);
+      return output;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Risk policy gate generation failed: ${message}`);
+    }
   },
 };
 

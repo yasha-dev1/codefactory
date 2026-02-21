@@ -5,7 +5,7 @@ import type { FileWriter } from '../core/file-writer.js';
 export interface HarnessContext {
   repoRoot: string;
   detection: DetectionResult;
-  runner?: ClaudeRunner;
+  runner: ClaudeRunner;
   fileWriter: FileWriter;
   userPreferences: UserPreferences;
   previousOutputs: Map<string, HarnessOutput>;

@@ -1,7 +1,7 @@
-import { join } from 'node:path';
-
 import type { HarnessModule, HarnessContext, HarnessOutput } from './types.js';
 import type { DetectionResult } from '../core/detector.js';
+import { buildDocsStructurePrompt } from '../prompts/docs-structure.js';
+import { buildSystemPrompt } from '../prompts/system.js';
 
 function buildArchitectureMd(detection: DetectionResult): string {
   const lang = detection.primaryLanguage;
@@ -254,32 +254,53 @@ export const docsStructureHarness: HarnessModule = {
   },
 
   async execute(ctx: HarnessContext): Promise<HarnessOutput> {
-    const snap = ctx.fileWriter.snapshot();
-    const { detection } = ctx;
+    const { detection, userPreferences } = ctx;
 
-    await ctx.fileWriter.write(
-      join(ctx.repoRoot, 'docs', 'architecture.md'),
-      buildArchitectureMd(detection),
-    );
-    await ctx.fileWriter.write(
-      join(ctx.repoRoot, 'docs', 'conventions.md'),
-      buildConventionsMd(detection),
-    );
-    await ctx.fileWriter.write(join(ctx.repoRoot, 'docs', 'layers.md'), buildLayersMd(detection));
+    // 1. Generate reference content from existing builders
+    const refArchitecture = buildArchitectureMd(detection);
+    const refConventions = buildConventionsMd(detection);
+    const refLayers = buildLayersMd(detection);
 
-    const diff = ctx.fileWriter.diffSince(snap);
+    // 2. Build the prompt with reference context
+    const basePrompt = buildDocsStructurePrompt(detection, userPreferences);
+    const prompt = `${basePrompt}
 
-    const output: HarnessOutput = {
-      harnessName: 'docs-structure',
-      filesCreated: diff.created,
-      filesModified: diff.modified,
-      metadata: {
-        targetFiles: ['docs/architecture.md', 'docs/conventions.md', 'docs/layers.md'],
-      },
-    };
+## Reference Implementation
 
-    ctx.previousOutputs.set('docs-structure', output);
+Use these as your structural template. Keep the same patterns but customize all
+language setup, install commands, test/lint/build commands, and tooling for the
+detected stack.
 
-    return output;
+### Reference: docs/architecture.md
+\`\`\`markdown
+${refArchitecture}
+\`\`\`
+
+### Reference: docs/conventions.md
+\`\`\`markdown
+${refConventions}
+\`\`\`
+
+### Reference: docs/layers.md
+\`\`\`markdown
+${refLayers}
+\`\`\``;
+
+    // 3. Call Claude runner
+    const systemPrompt = buildSystemPrompt();
+    try {
+      const result = await ctx.runner.generate(prompt, systemPrompt);
+      const output: HarnessOutput = {
+        harnessName: 'docs-structure',
+        filesCreated: result.filesCreated,
+        filesModified: result.filesModified,
+        metadata: { docsPath: 'docs/' },
+      };
+      ctx.previousOutputs.set('docs-structure', output);
+      return output;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Documentation structure generation failed: ${message}`);
+    }
   },
 };

@@ -74,15 +74,18 @@ describe('issueTriageHarness', () => {
     expect(issueTriageHarness.isApplicable(ctx)).toBe(true);
   });
 
-  it('should call runner.generate with the prompt', async () => {
+  it('should call runner.generate with the prompt containing reference content', async () => {
     const ctx = createMockContext();
     await issueTriageHarness.execute(ctx);
 
     expect(ctx.runner.generate).toHaveBeenCalledOnce();
-    expect(ctx.runner.generate).toHaveBeenCalledWith(
-      'mocked issue triage prompt',
-      'mocked system prompt',
-    );
+    const [prompt, systemPrompt] = (ctx.runner.generate as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(prompt).toContain('mocked issue triage prompt');
+    expect(prompt).toContain('## Reference Implementation');
+    expect(prompt).toContain('### Reference: .github/workflows/issue-triage.yml');
+    expect(prompt).toContain('### Reference: scripts/issue-triage-guard.ts');
+    expect(prompt).toContain('### Reference: .codefactory/prompts/issue-triage.md');
+    expect(systemPrompt).toBe('mocked system prompt');
   });
 
   it('should return correct output with filesCreated', async () => {
@@ -104,16 +107,12 @@ describe('issueTriageHarness', () => {
     expect(stored?.harnessName).toBe('issue-triage');
   });
 
-  it('should include metadata with targetFiles', async () => {
+  it('should include metadata with workflowPath', async () => {
     const ctx = createMockContext();
     const output = await issueTriageHarness.execute(ctx);
 
     expect(output.metadata).toBeDefined();
-    expect(output.metadata?.targetFiles).toEqual([
-      '.github/workflows/issue-triage.yml',
-      'scripts/issue-triage-guard.ts',
-    ]);
-    expect(output.metadata?.promptFile).toBe('.codefactory/prompts/issue-triage.md');
+    expect(output.metadata?.workflowPath).toBe('.github/workflows/issue-triage.yml');
   });
 
   it('should wrap errors with descriptive message', async () => {

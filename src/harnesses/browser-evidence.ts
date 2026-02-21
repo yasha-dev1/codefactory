@@ -1,5 +1,7 @@
-import { join } from 'node:path';
 import type { HarnessModule, HarnessContext, HarnessOutput } from './types.js';
+
+import { buildBrowserEvidencePrompt } from '../prompts/browser-evidence.js';
+import { buildSystemPrompt } from '../prompts/system.js';
 
 const CAPTURE_SCRIPT = `#!/usr/bin/env node
 /**
@@ -260,40 +262,53 @@ export const browserEvidenceHarness: HarnessModule = {
   },
 
   async execute(ctx: HarnessContext): Promise<HarnessOutput> {
-    const snap = ctx.fileWriter.snapshot();
+    const { detection, userPreferences } = ctx;
 
-    await ctx.fileWriter.write(
-      join(ctx.repoRoot, 'scripts', 'harness-ui-capture-browser-evidence.ts'),
-      CAPTURE_SCRIPT,
-    );
+    // 1. Reference templates from existing string constants
+    const refCaptureScript = CAPTURE_SCRIPT;
+    const refVerifyScript = VERIFY_SCRIPT;
+    const refWorkflow = WORKFLOW_YML;
 
-    await ctx.fileWriter.write(
-      join(ctx.repoRoot, 'scripts', 'harness-ui-verify-browser-evidence.ts'),
-      VERIFY_SCRIPT,
-    );
+    // 2. Build the prompt with reference context
+    const basePrompt = buildBrowserEvidencePrompt(detection, userPreferences);
+    const prompt = `${basePrompt}
 
-    await ctx.fileWriter.write(
-      join(ctx.repoRoot, '.github', 'workflows', 'browser-evidence.yml'),
-      WORKFLOW_YML,
-    );
+## Reference Implementation
 
-    const diff = ctx.fileWriter.diffSince(snap);
+Use these as your structural template. Keep the same patterns but customize all
+language setup, install commands, test/lint/build commands, and tooling for the
+detected stack.
 
-    const output: HarnessOutput = {
-      harnessName: 'browser-evidence',
-      filesCreated: diff.created,
-      filesModified: diff.modified,
-      metadata: {
-        targetFiles: [
-          'scripts/harness-ui-capture-browser-evidence.ts',
-          'scripts/harness-ui-verify-browser-evidence.ts',
-          '.github/workflows/browser-evidence.yml',
-        ],
-      },
-    };
+### Reference: scripts/harness-ui-capture-browser-evidence.ts
+\`\`\`typescript
+${refCaptureScript}
+\`\`\`
 
-    ctx.previousOutputs.set('browser-evidence', output);
+### Reference: scripts/harness-ui-verify-browser-evidence.ts
+\`\`\`typescript
+${refVerifyScript}
+\`\`\`
 
-    return output;
+### Reference: .github/workflows/browser-evidence.yml
+\`\`\`yaml
+${refWorkflow}
+\`\`\``;
+
+    // 3. Call Claude runner
+    const systemPrompt = buildSystemPrompt();
+    try {
+      const result = await ctx.runner.generate(prompt, systemPrompt);
+      const output: HarnessOutput = {
+        harnessName: 'browser-evidence',
+        filesCreated: result.filesCreated,
+        filesModified: result.filesModified,
+        metadata: { evidencePath: 'scripts/browser-evidence/' },
+      };
+      ctx.previousOutputs.set('browser-evidence', output);
+      return output;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Browser evidence generation failed: ${message}`);
+    }
   },
 };

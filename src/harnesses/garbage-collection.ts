@@ -1,5 +1,6 @@
-import { join } from 'node:path';
 import type { HarnessModule, HarnessContext, HarnessOutput } from './types.js';
+import { buildGarbageCollectionPrompt } from '../prompts/garbage-collection.js';
+import { buildSystemPrompt } from '../prompts/system.js';
 
 const DOC_GARDENING_WORKFLOW = `name: Documentation Gardening
 
@@ -235,31 +236,47 @@ export const garbageCollectionHarness: HarnessModule = {
   },
 
   async execute(ctx: HarnessContext): Promise<HarnessOutput> {
-    const snap = ctx.fileWriter.snapshot();
+    const { detection, userPreferences } = ctx;
 
-    await ctx.fileWriter.write(
-      join(ctx.repoRoot, '.github', 'workflows', 'doc-gardening.yml'),
-      DOC_GARDENING_WORKFLOW,
-    );
+    // 1. Generate reference templates from existing constants
+    const refWorkflow = DOC_GARDENING_WORKFLOW;
+    const refPrompt = DOC_GARDENING_PROMPT;
 
-    await ctx.fileWriter.write(
-      join(ctx.repoRoot, 'scripts', 'doc-gardening-prompt.md'),
-      DOC_GARDENING_PROMPT,
-    );
+    // 2. Build the prompt with reference context
+    const basePrompt = buildGarbageCollectionPrompt(detection, userPreferences);
+    const prompt = `${basePrompt}
 
-    const diff = ctx.fileWriter.diffSince(snap);
+## Reference Implementation
 
-    const output: HarnessOutput = {
-      harnessName: 'garbage-collection',
-      filesCreated: diff.created,
-      filesModified: diff.modified,
-      metadata: {
-        targetFiles: ['.github/workflows/doc-gardening.yml', 'scripts/doc-gardening-prompt.md'],
-      },
-    };
+Use these as your structural template. Keep the same patterns but customize all
+language setup, install commands, test/lint/build commands, and tooling for the
+detected stack.
 
-    ctx.previousOutputs.set('garbage-collection', output);
+### Reference: .github/workflows/doc-gardening.yml
+\`\`\`yaml
+${refWorkflow}
+\`\`\`
 
-    return output;
+### Reference: scripts/doc-gardening-prompt.md
+\`\`\`markdown
+${refPrompt}
+\`\`\``;
+
+    // 3. Call Claude runner
+    const systemPrompt = buildSystemPrompt();
+    try {
+      const result = await ctx.runner.generate(prompt, systemPrompt);
+      const output: HarnessOutput = {
+        harnessName: 'garbage-collection',
+        filesCreated: result.filesCreated,
+        filesModified: result.filesModified,
+        metadata: { workflowPath: '.github/workflows/doc-gardening.yml' },
+      };
+      ctx.previousOutputs.set('garbage-collection', output);
+      return output;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Garbage collection generation failed: ${message}`);
+    }
   },
 };

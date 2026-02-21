@@ -1,5 +1,7 @@
-import { join } from 'node:path';
 import type { HarnessModule, HarnessContext, HarnessOutput } from './types.js';
+
+import { buildPrTemplatesPrompt } from '../prompts/pr-templates.js';
+import { buildSystemPrompt } from '../prompts/system.js';
 
 const PULL_REQUEST_TEMPLATE = `## Summary
 <!-- Brief description of what this PR does and why. Link to the issue if applicable. -->
@@ -132,34 +134,47 @@ export const prTemplatesHarness: HarnessModule = {
   },
 
   async execute(ctx: HarnessContext): Promise<HarnessOutput> {
-    const snap = ctx.fileWriter.snapshot();
+    const { detection, userPreferences } = ctx;
 
-    await ctx.fileWriter.write(
-      join(ctx.repoRoot, '.github', 'PULL_REQUEST_TEMPLATE.md'),
-      PULL_REQUEST_TEMPLATE,
-    );
+    // 1. Reference templates from existing string constants
+    const refDefaultTemplate = PULL_REQUEST_TEMPLATE;
+    const refAgentTemplate = AGENT_PR_TEMPLATE;
 
-    await ctx.fileWriter.write(
-      join(ctx.repoRoot, '.github', 'PULL_REQUEST_TEMPLATE', 'agent-pr.md'),
-      AGENT_PR_TEMPLATE,
-    );
+    // 2. Build the prompt with reference context
+    const basePrompt = buildPrTemplatesPrompt(detection, userPreferences);
+    const prompt = `${basePrompt}
 
-    const diff = ctx.fileWriter.diffSince(snap);
+## Reference Implementation
 
-    const output: HarnessOutput = {
-      harnessName: 'pr-templates',
-      filesCreated: diff.created,
-      filesModified: diff.modified,
-      metadata: {
-        targetFiles: [
-          '.github/PULL_REQUEST_TEMPLATE.md',
-          '.github/PULL_REQUEST_TEMPLATE/agent-pr.md',
-        ],
-      },
-    };
+Use these as your structural template. Keep the same patterns but customize all
+language setup, install commands, test/lint/build commands, and tooling for the
+detected stack.
 
-    ctx.previousOutputs.set('pr-templates', output);
+### Reference: .github/PULL_REQUEST_TEMPLATE.md
+\`\`\`markdown
+${refDefaultTemplate}
+\`\`\`
 
-    return output;
+### Reference: .github/PULL_REQUEST_TEMPLATE/agent-pr.md
+\`\`\`markdown
+${refAgentTemplate}
+\`\`\``;
+
+    // 3. Call Claude runner
+    const systemPrompt = buildSystemPrompt();
+    try {
+      const result = await ctx.runner.generate(prompt, systemPrompt);
+      const output: HarnessOutput = {
+        harnessName: 'pr-templates',
+        filesCreated: result.filesCreated,
+        filesModified: result.filesModified,
+        metadata: { templatePath: '.github/PULL_REQUEST_TEMPLATE.md' },
+      };
+      ctx.previousOutputs.set('pr-templates', output);
+      return output;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`PR templates generation failed: ${message}`);
+    }
   },
 };

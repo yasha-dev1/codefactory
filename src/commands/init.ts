@@ -1,5 +1,5 @@
 import { join, relative } from 'node:path';
-import { exec } from 'node:child_process';
+import { exec, execSync } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { logger } from '../ui/logger.js';
@@ -8,13 +8,19 @@ import { confirmPrompt, selectPrompt, multiselectPrompt, inputPrompt } from '../
 import { isGitRepo, getRepoRoot } from '../utils/git.js';
 import { readFileIfExists } from '../utils/fs.js';
 import { NotAGitRepoError } from '../utils/errors.js';
+import { ClaudeRunner } from '../core/claude-runner.js';
 import { FileWriter } from '../core/file-writer.js';
 import { loadHarnessConfig, saveHarnessConfig } from '../core/config.js';
 import type { HarnessConfig } from '../core/config.js';
 import { runHeuristicDetection } from '../core/detector.js';
 import type { DetectionResult } from '../core/detector.js';
 import { getHarnessModules } from '../harnesses/index.js';
-import type { HarnessContext, HarnessOutput, UserPreferences } from '../harnesses/types.js';
+import type {
+  HarnessContext,
+  HarnessModule,
+  HarnessOutput,
+  UserPreferences,
+} from '../harnesses/types.js';
 
 const execAsync = promisify(exec);
 
@@ -124,9 +130,11 @@ export async function initCommand(options: InitOptions): Promise<void> {
   }
 
   // Build harness selection list
+  const tempRunner = new ClaudeRunner({ cwd: repoRoot });
   const tempCtx: HarnessContext = {
     repoRoot,
     detection,
+    runner: tempRunner,
     fileWriter: new FileWriter(),
     userPreferences: {
       ciProvider,
@@ -195,13 +203,18 @@ export async function initCommand(options: InitOptions): Promise<void> {
     return;
   }
 
-  // ── 4. Harness execution ─────────────────────────────────────────────
+  // ── 4. Ensure GitHub labels ──────────────────────────────────────────
+  await ensureGitHubLabels(repoRoot, ciProvider);
+
+  // ── 5. Harness execution ─────────────────────────────────────────────
+  const runner = new ClaudeRunner({ cwd: repoRoot });
   const fileWriter = new FileWriter();
   const previousOutputs = new Map<string, HarnessOutput>();
 
   const ctx: HarnessContext = {
     repoRoot,
     detection,
+    runner,
     fileWriter,
     userPreferences,
     previousOutputs,
@@ -210,33 +223,45 @@ export async function initCommand(options: InitOptions): Promise<void> {
   console.log();
   logger.header('Generating harness artifacts');
 
-  const selectedModules = allHarnesses.filter((h) => selectedHarnesses.includes(h.name));
+  const applicableHarnesses = allHarnesses.filter((h) => selectedHarnesses.includes(h.name));
 
-  for (const harness of selectedModules) {
-    try {
-      const output = await withSpinner(`Generating ${harness.displayName}...`, () =>
-        harness.execute(ctx),
-      );
+  const batches = [
+    ['risk-contract', 'claude-md', 'docs-structure', 'pre-commit-hooks'],
+    ['risk-policy-gate', 'ci-pipeline', 'review-agent', 'remediation-loop'],
+    ['browser-evidence', 'pr-templates', 'architectural-linters', 'garbage-collection'],
+    ['incident-harness-loop', 'issue-triage', 'issue-planner', 'issue-implementer'],
+  ];
 
-      previousOutputs.set(harness.name, output);
+  for (const batch of batches) {
+    const harnessesInBatch = batch
+      .map((name) => applicableHarnesses.find((h) => h.name === name))
+      .filter((h): h is HarnessModule => h != null);
 
-      for (const f of output.filesCreated) {
-        logger.fileCreated(relative(repoRoot, f));
+    if (harnessesInBatch.length === 0) continue;
+
+    const results = await Promise.allSettled(harnessesInBatch.map((h) => h.execute(ctx)));
+
+    for (const [i, result] of results.entries()) {
+      if (result.status === 'fulfilled') {
+        const output = result.value;
+        previousOutputs.set(harnessesInBatch[i].name, output);
+
+        for (const f of output.filesCreated) {
+          logger.fileCreated(relative(repoRoot, f));
+        }
+        for (const f of output.filesModified) {
+          logger.fileModified(relative(repoRoot, f));
+        }
+      } else {
+        logger.warn(`Harness ${harnessesInBatch[i].name} failed: ${result.reason}`);
       }
-      for (const f of output.filesModified) {
-        logger.fileModified(relative(repoRoot, f));
-      }
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      logger.warn(`Harness "${harness.displayName}" failed: ${msg}`);
-      logger.dim('  Continuing with remaining harnesses...');
     }
   }
 
-  // ── 5. Add npm scripts to target repo's package.json ─────────────────
+  // ── 6. Add npm scripts to target repo's package.json ─────────────────
   await addHarnessScripts(repoRoot, selectedHarnesses, fileWriter);
 
-  // ── 6. Save harness config ───────────────────────────────────────────
+  // ── 7. Save harness config ───────────────────────────────────────────
   const config: HarnessConfig = {
     version: '1.0.0',
     repoRoot,
@@ -247,7 +272,7 @@ export async function initCommand(options: InitOptions): Promise<void> {
       ciProvider: detection.ciProvider,
       monorepo: detection.monorepo,
     },
-    harnesses: selectedModules.map((h) => {
+    harnesses: applicableHarnesses.map((h) => {
       const output = previousOutputs.get(h.name);
       return {
         name: h.name,
@@ -263,12 +288,16 @@ export async function initCommand(options: InitOptions): Promise<void> {
   await saveHarnessConfig(repoRoot, config);
   logger.fileCreated('harness.config.json');
 
-  // ── 7. Summary ───────────────────────────────────────────────────────
+  // ── 8. Summary ───────────────────────────────────────────────────────
   console.log();
   logger.header('Summary');
 
-  const allCreated = fileWriter.getCreatedFiles();
-  const allModified = fileWriter.getModifiedFiles();
+  const allCreated: string[] = [];
+  const allModified: string[] = [];
+  for (const output of previousOutputs.values()) {
+    allCreated.push(...output.filesCreated);
+    allModified.push(...output.filesModified);
+  }
 
   if (allCreated.length > 0) {
     logger.success(`Files created (${allCreated.length}):`);
@@ -341,6 +370,36 @@ export async function initCommand(options: InitOptions): Promise<void> {
 }
 
 // ── Helper functions ──────────────────────────────────────────────────────
+
+const GITHUB_LABELS: { name: string; color: string; description: string }[] = [
+  { name: 'agent:plan', color: '0E8A16', description: 'Triggers the planner agent' },
+  { name: 'agent:implement', color: '1D76DB', description: 'Triggers the implementer agent' },
+  { name: 'agent:needs-judgment', color: 'D93F0B', description: 'Requires human judgment' },
+  { name: 'agent-pr', color: 'BFD4F2', description: 'PR created by an agent' },
+  { name: 'review-fix-cycle-1', color: 'FBCA04', description: 'First review-fix cycle' },
+  { name: 'review-fix-cycle-2', color: 'FBCA04', description: 'Second review-fix cycle' },
+  { name: 'review-fix-cycle-3', color: 'FBCA04', description: 'Third review-fix cycle' },
+  { name: 'needs-more-info', color: 'D4C5F9', description: 'Needs additional information' },
+  { name: 'triage:failed', color: 'B60205', description: 'Triage failed' },
+  { name: 'needs-human-review', color: 'E99695', description: 'Needs human review' },
+];
+
+async function ensureGitHubLabels(repoRoot: string, ciProvider: string): Promise<void> {
+  if (ciProvider !== 'github-actions') return;
+
+  logger.info('Ensuring GitHub labels exist...');
+  for (const label of GITHUB_LABELS) {
+    try {
+      execSync(
+        `gh label create "${label.name}" --color "${label.color}" --description "${label.description}" --force`,
+        { cwd: repoRoot, stdio: 'ignore' },
+      );
+    } catch {
+      // Label creation may fail if gh CLI is not available or not authenticated — non-fatal
+    }
+  }
+  logger.dim('  GitHub labels checked.');
+}
 
 function displayDetectionSummary(d: DetectionResult): void {
   console.log();

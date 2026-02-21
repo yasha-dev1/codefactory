@@ -1,6 +1,6 @@
-import { join } from 'node:path';
-
 import type { HarnessModule, HarnessContext, HarnessOutput } from './types.js';
+import { buildCiPipelinePrompt } from '../prompts/ci-pipeline.js';
+import { buildSystemPrompt } from '../prompts/system.js';
 
 export const ciPipelineHarness: HarnessModule = {
   name: 'ci-pipeline',
@@ -13,54 +13,66 @@ export const ciPipelineHarness: HarnessModule = {
   },
 
   async execute(ctx: HarnessContext): Promise<HarnessOutput> {
-    const snap = ctx.fileWriter.snapshot();
-    const d = ctx.detection;
+    const { detection, userPreferences } = ctx;
+    const d = detection;
 
     const testCmd = d.testCommand ?? 'npm test';
     const lintCmd = d.lintCommand ?? 'npm run lint';
     const buildCmd = d.buildCommand ?? 'npm run build';
     const nodeVersion = '22';
 
-    // ── 1. CI workflow ──────────────────────────────────────────────────
-    await ctx.fileWriter.write(
-      join(ctx.repoRoot, '.github/workflows/ci.yml'),
-      buildCiWorkflow(testCmd, lintCmd, buildCmd, nodeVersion),
-    );
+    // 1. Generate reference templates from existing builders
+    const refCiWorkflow = buildCiWorkflow(testCmd, lintCmd, buildCmd, nodeVersion);
+    const refStructuralTests = buildStructuralTestsWorkflow();
+    const refHarnessSmoke = buildHarnessSmokeWorkflow();
+    const refStructuralScript = buildStructuralTestsScript();
 
-    // ── 2. Structural tests workflow ────────────────────────────────────
-    await ctx.fileWriter.write(
-      join(ctx.repoRoot, '.github/workflows/structural-tests.yml'),
-      buildStructuralTestsWorkflow(),
-    );
+    // 2. Build the prompt with reference context
+    const basePrompt = buildCiPipelinePrompt(detection, userPreferences);
+    const prompt = `${basePrompt}
 
-    // ── 3. Harness smoke workflow ───────────────────────────────────────
-    await ctx.fileWriter.write(
-      join(ctx.repoRoot, '.github/workflows/harness-smoke.yml'),
-      buildHarnessSmokeWorkflow(),
-    );
+## Reference Implementation
 
-    // ── 4. Structural tests shell script ────────────────────────────────
-    await ctx.fileWriter.write(
-      join(ctx.repoRoot, 'scripts/structural-tests.sh'),
-      buildStructuralTestsScript(),
-    );
+Use these as your structural template. Keep the same patterns but customize all
+language setup, install commands, test/lint/build commands, and tooling for the
+detected stack.
 
-    const diff = ctx.fileWriter.diffSince(snap);
+### Reference: .github/workflows/ci.yml
+\`\`\`yaml
+${refCiWorkflow}
+\`\`\`
 
-    const output: HarnessOutput = {
-      harnessName: 'ci-pipeline',
-      filesCreated: diff.created,
-      filesModified: diff.modified,
-      metadata: {
-        ciWorkflowPath: '.github/workflows/ci.yml',
-        structuralTestsPath: '.github/workflows/structural-tests.yml',
-        harnessSmokePath: '.github/workflows/harness-smoke.yml',
-      },
-    };
+### Reference: .github/workflows/structural-tests.yml
+\`\`\`yaml
+${refStructuralTests}
+\`\`\`
 
-    ctx.previousOutputs.set('ci-pipeline', output);
+### Reference: .github/workflows/harness-smoke.yml
+\`\`\`yaml
+${refHarnessSmoke}
+\`\`\`
 
-    return output;
+### Reference: scripts/structural-tests.sh
+\`\`\`bash
+${refStructuralScript}
+\`\`\``;
+
+    // 3. Call Claude runner
+    const systemPrompt = buildSystemPrompt();
+    try {
+      const result = await ctx.runner.generate(prompt, systemPrompt);
+      const output: HarnessOutput = {
+        harnessName: 'ci-pipeline',
+        filesCreated: result.filesCreated,
+        filesModified: result.filesModified,
+        metadata: { ciWorkflowPath: '.github/workflows/ci.yml' },
+      };
+      ctx.previousOutputs.set('ci-pipeline', output);
+      return output;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`CI pipeline generation failed: ${message}`);
+    }
   },
 };
 

@@ -1,5 +1,7 @@
-import { join } from 'node:path';
 import type { HarnessModule, HarnessContext, HarnessOutput } from './types.js';
+
+import { buildArchitecturalLintersPrompt } from '../prompts/architectural-linters.js';
+import { buildSystemPrompt } from '../prompts/system.js';
 
 const LINT_ARCHITECTURE_SCRIPT =
   [
@@ -574,32 +576,47 @@ export const architecturalLintersHarness: HarnessModule = {
   },
 
   async execute(ctx: HarnessContext): Promise<HarnessOutput> {
-    const snap = ctx.fileWriter.snapshot();
+    const { detection, userPreferences } = ctx;
 
-    await ctx.fileWriter.write(
-      join(ctx.repoRoot, 'scripts', 'lint-architecture.ts'),
-      LINT_ARCHITECTURE_SCRIPT,
-    );
+    // 1. Generate reference templates from existing builders/constants
+    const refLintScript = LINT_ARCHITECTURE_SCRIPT;
+    const refConfig = buildConfigJson(detection.architecturalLayers);
 
-    await ctx.fileWriter.write(
-      join(ctx.repoRoot, 'scripts', 'lint-architecture-config.json'),
-      buildConfigJson(ctx.detection.architecturalLayers),
-    );
+    // 2. Build the prompt with reference context
+    const basePrompt = buildArchitecturalLintersPrompt(detection, userPreferences);
+    const prompt = `${basePrompt}
 
-    const diff = ctx.fileWriter.diffSince(snap);
+## Reference Implementation
 
-    const output: HarnessOutput = {
-      harnessName: 'architectural-linters',
-      filesCreated: diff.created,
-      filesModified: diff.modified,
-      metadata: {
-        layers: ctx.detection.architecturalLayers,
-        targetFiles: ['scripts/lint-architecture.ts', 'scripts/lint-architecture-config.json'],
-      },
-    };
+Use these as your structural template. Keep the same patterns but customize all
+language setup, install commands, test/lint/build commands, and tooling for the
+detected stack.
 
-    ctx.previousOutputs.set('architectural-linters', output);
+### Reference: scripts/lint-architecture.ts
+\`\`\`typescript
+${refLintScript}
+\`\`\`
 
-    return output;
+### Reference: scripts/lint-architecture-config.json
+\`\`\`json
+${refConfig}
+\`\`\``;
+
+    // 3. Call Claude runner
+    const systemPrompt = buildSystemPrompt();
+    try {
+      const result = await ctx.runner.generate(prompt, systemPrompt);
+      const output: HarnessOutput = {
+        harnessName: 'architectural-linters',
+        filesCreated: result.filesCreated,
+        filesModified: result.filesModified,
+        metadata: { linterPath: 'scripts/lint-architecture.sh' },
+      };
+      ctx.previousOutputs.set('architectural-linters', output);
+      return output;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Architectural linters generation failed: ${message}`);
+    }
   },
 };

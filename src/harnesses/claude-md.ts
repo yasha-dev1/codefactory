@@ -1,7 +1,7 @@
-import { join } from 'node:path';
-
 import type { HarnessModule, HarnessContext, HarnessOutput } from './types.js';
 import type { DetectionResult } from '../core/detector.js';
+import { buildClaudeMdPrompt } from '../prompts/claude-md.js';
+import { buildSystemPrompt } from '../prompts/system.js';
 
 function buildProjectOverview(detection: DetectionResult): string {
   const parts: string[] = [];
@@ -120,10 +120,10 @@ export const claudeMdHarness: HarnessModule = {
   },
 
   async execute(ctx: HarnessContext): Promise<HarnessOutput> {
-    const snap = ctx.fileWriter.snapshot();
-    const { detection } = ctx;
+    const { detection, userPreferences } = ctx;
 
-    const content = `# CLAUDE.md
+    // 1. Generate reference content from existing builders
+    const refContent = `# CLAUDE.md
 
 ## Project Overview
 
@@ -160,21 +160,36 @@ ${buildCriticalPathsSection(detection)}
 - Classify every PR by risk tier (Tier 1/2/3) in the PR description.
 `;
 
-    await ctx.fileWriter.write(join(ctx.repoRoot, 'CLAUDE.md'), content);
+    // 2. Build the prompt with reference context
+    const basePrompt = buildClaudeMdPrompt(detection, userPreferences);
+    const prompt = `${basePrompt}
 
-    const diff = ctx.fileWriter.diffSince(snap);
+## Reference Implementation
 
-    const output: HarnessOutput = {
-      harnessName: 'claude-md',
-      filesCreated: diff.created,
-      filesModified: diff.modified,
-      metadata: {
-        targetFiles: ['CLAUDE.md'],
-      },
-    };
+Use this as your structural template. Keep the same patterns but customize all
+language setup, install commands, test/lint/build commands, and tooling for the
+detected stack.
 
-    ctx.previousOutputs.set('claude-md', output);
+### Reference: CLAUDE.md
+\`\`\`markdown
+${refContent}
+\`\`\``;
 
-    return output;
+    // 3. Call Claude runner
+    const systemPrompt = buildSystemPrompt();
+    try {
+      const result = await ctx.runner.generate(prompt, systemPrompt);
+      const output: HarnessOutput = {
+        harnessName: 'claude-md',
+        filesCreated: result.filesCreated,
+        filesModified: result.filesModified,
+        metadata: { claudeMdPath: 'CLAUDE.md' },
+      };
+      ctx.previousOutputs.set('claude-md', output);
+      return output;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`CLAUDE.md generation failed: ${message}`);
+    }
   },
 };

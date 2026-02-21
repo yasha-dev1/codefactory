@@ -70,15 +70,19 @@ describe('riskContractHarness', () => {
     expect(riskContractHarness.isApplicable(ctx)).toBe(true);
   });
 
-  it('should call runner.generate with the prompt', async () => {
+  it('should call runner.generate with the prompt including reference', async () => {
     const ctx = createMockContext();
     await riskContractHarness.execute(ctx);
 
     expect(ctx.runner.generate).toHaveBeenCalledOnce();
     expect(ctx.runner.generate).toHaveBeenCalledWith(
-      'mocked risk contract prompt',
+      expect.stringContaining('mocked risk contract prompt'),
       'mocked system prompt',
     );
+    // Verify the reference implementation section is included
+    const actualPrompt = vi.mocked(ctx.runner.generate).mock.calls[0][0];
+    expect(actualPrompt).toContain('## Reference Implementation');
+    expect(actualPrompt).toContain('### Reference: harness.config.json');
   });
 
   it('should include harness.config.json in filesCreated', async () => {

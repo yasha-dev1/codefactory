@@ -1,7 +1,7 @@
-import { join } from 'node:path';
-
 import type { HarnessModule, HarnessContext, HarnessOutput } from './types.js';
 import type { DetectionResult } from '../core/detector.js';
+import { buildIssueTriagePrompt } from '../prompts/issue-triage.js';
+import { buildSystemPrompt } from '../prompts/system.js';
 
 export const issueTriageHarness: HarnessModule = {
   name: 'issue-triage',
@@ -14,33 +14,54 @@ export const issueTriageHarness: HarnessModule = {
   },
 
   async execute(ctx: HarnessContext): Promise<HarnessOutput> {
-    const snap = ctx.fileWriter.snapshot();
+    const { detection, userPreferences } = ctx;
 
-    await ctx.fileWriter.write(
-      join(ctx.repoRoot, '.github', 'workflows', 'issue-triage.yml'),
-      buildIssueTriageWorkflowYml(ctx.detection),
-    );
+    // 1. Generate reference templates from existing builders
+    const refWorkflow = buildIssueTriageWorkflowYml(detection);
+    const refGuard = buildIssueTriageGuardTs();
+    const refPromptMd = buildIssueTriagePromptMd();
 
-    await ctx.fileWriter.write(
-      join(ctx.repoRoot, 'scripts', 'issue-triage-guard.ts'),
-      buildIssueTriageGuardTs(),
-    );
+    // 2. Build the prompt with reference context
+    const basePrompt = buildIssueTriagePrompt(detection, userPreferences);
+    const prompt = `${basePrompt}
 
-    await ctx.fileWriter.write(
-      join(ctx.repoRoot, '.codefactory', 'prompts', 'issue-triage.md'),
-      buildIssueTriagePromptMd(),
-    );
+## Reference Implementation
 
-    const diff = ctx.fileWriter.diffSince(snap);
-    const output: HarnessOutput = {
-      harnessName: 'issue-triage',
-      filesCreated: diff.created,
-      filesModified: diff.modified,
-    };
+Use these as your structural template. Keep the same patterns but customize all
+language setup, install commands, test/lint/build commands, and tooling for the
+detected stack.
 
-    ctx.previousOutputs.set('issue-triage', output);
+### Reference: .github/workflows/issue-triage.yml
+\`\`\`yaml
+${refWorkflow}
+\`\`\`
 
-    return output;
+### Reference: scripts/issue-triage-guard.ts
+\`\`\`typescript
+${refGuard}
+\`\`\`
+
+### Reference: .codefactory/prompts/issue-triage.md
+\`\`\`markdown
+${refPromptMd}
+\`\`\``;
+
+    // 3. Call Claude runner
+    const systemPrompt = buildSystemPrompt();
+    try {
+      const result = await ctx.runner.generate(prompt, systemPrompt);
+      const output: HarnessOutput = {
+        harnessName: 'issue-triage',
+        filesCreated: result.filesCreated,
+        filesModified: result.filesModified,
+        metadata: { workflowPath: '.github/workflows/issue-triage.yml' },
+      };
+      ctx.previousOutputs.set('issue-triage', output);
+      return output;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Issue triage generation failed: ${message}`);
+    }
   },
 };
 

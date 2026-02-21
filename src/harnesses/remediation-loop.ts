@@ -1,6 +1,7 @@
-import { join } from 'node:path';
-
 import type { HarnessModule, HarnessContext, HarnessOutput } from './types.js';
+
+import { buildRemediationLoopPrompt } from '../prompts/remediation-loop.js';
+import { buildSystemPrompt } from '../prompts/system.js';
 
 export const remediationLoopHarness: HarnessModule = {
   name: 'remediation-loop',
@@ -13,47 +14,57 @@ export const remediationLoopHarness: HarnessModule = {
   },
 
   async execute(ctx: HarnessContext): Promise<HarnessOutput> {
-    const snap = ctx.fileWriter.snapshot();
-    const d = ctx.detection;
+    const { detection, userPreferences } = ctx;
 
-    const testCmd = d.testCommand ?? 'npm test';
-    const lintCmd = d.lintCommand ?? 'npm run lint';
+    const testCmd = detection.testCommand ?? 'npm test';
+    const lintCmd = detection.lintCommand ?? 'npm run lint';
 
-    // ── 1. Remediation agent workflow ───────────────────────────────────
-    await ctx.fileWriter.write(
-      join(ctx.repoRoot, '.github/workflows/remediation-agent.yml'),
-      buildRemediationWorkflow(testCmd, lintCmd),
-    );
+    // 1. Generate reference templates from existing builders
+    const refWorkflow = buildRemediationWorkflow(testCmd, lintCmd);
+    const refPrompt = buildRemediationPrompt(lintCmd, testCmd);
+    const refGuard = buildRemediationGuard();
 
-    // ── 2. Remediation agent prompt ─────────────────────────────────────
-    await ctx.fileWriter.write(
-      join(ctx.repoRoot, 'scripts/remediation-agent-prompt.md'),
-      buildRemediationPrompt(lintCmd, testCmd),
-    );
+    // 2. Build the prompt with reference context
+    const basePrompt = buildRemediationLoopPrompt(detection, userPreferences);
+    const prompt = `${basePrompt}
 
-    // ── 3. Remediation guard script ─────────────────────────────────────
-    await ctx.fileWriter.write(
-      join(ctx.repoRoot, 'scripts/remediation-guard.ts'),
-      buildRemediationGuard(),
-    );
+## Reference Implementation
 
-    const diff = ctx.fileWriter.diffSince(snap);
+Use these as your structural template. Keep the same patterns but customize all
+language setup, install commands, test/lint/build commands, and tooling for the
+detected stack.
 
-    const output: HarnessOutput = {
-      harnessName: 'remediation-loop',
-      filesCreated: diff.created,
-      filesModified: diff.modified,
-      metadata: {
-        targetFiles: [
-          '.github/workflows/remediation-agent.yml',
-          'scripts/remediation-agent-prompt.md',
-        ],
-      },
-    };
+### Reference: .github/workflows/remediation-agent.yml
+\`\`\`yaml
+${refWorkflow}
+\`\`\`
 
-    ctx.previousOutputs.set('remediation-loop', output);
+### Reference: scripts/remediation-agent-prompt.md
+\`\`\`markdown
+${refPrompt}
+\`\`\`
 
-    return output;
+### Reference: scripts/remediation-guard.ts
+\`\`\`typescript
+${refGuard}
+\`\`\``;
+
+    // 3. Call Claude runner
+    const systemPrompt = buildSystemPrompt();
+    try {
+      const result = await ctx.runner.generate(prompt, systemPrompt);
+      const output: HarnessOutput = {
+        harnessName: 'remediation-loop',
+        filesCreated: result.filesCreated,
+        filesModified: result.filesModified,
+        metadata: { remediationWorkflowPath: '.github/workflows/remediation-loop.yml' },
+      };
+      ctx.previousOutputs.set('remediation-loop', output);
+      return output;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Remediation loop generation failed: ${message}`);
+    }
   },
 };
 

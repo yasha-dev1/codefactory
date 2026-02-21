@@ -1,6 +1,7 @@
-import { join } from 'node:path';
-
 import type { HarnessModule, HarnessContext, HarnessOutput } from './types.js';
+
+import { buildReviewAgentPrompt } from '../prompts/review-agent.js';
+import { buildSystemPrompt } from '../prompts/system.js';
 
 export const reviewAgentHarness: HarnessModule = {
   name: 'review-agent',
@@ -13,59 +14,72 @@ export const reviewAgentHarness: HarnessModule = {
   },
 
   async execute(ctx: HarnessContext): Promise<HarnessOutput> {
-    const snap = ctx.fileWriter.snapshot();
+    const { detection, userPreferences } = ctx;
 
-    // ── 1. Code review agent workflow ───────────────────────────────────
-    await ctx.fileWriter.write(
-      join(ctx.repoRoot, '.github/workflows/code-review-agent.yml'),
-      buildCodeReviewWorkflow(),
-    );
+    // 1. Generate reference templates from existing builders
+    const refCodeReviewWorkflow = buildCodeReviewWorkflow();
+    const refRerunWorkflow = buildRerunWorkflow();
+    const refAutoResolveWorkflow = buildAutoResolveWorkflow();
+    const refReviewAgentUtils = buildReviewAgentUtils();
+    const refReviewPrompt = buildReviewPrompt();
+    const refCodefactoryPrompt = buildCodefactoryPrompt();
 
-    // ── 2. Review agent rerun workflow ──────────────────────────────────
-    await ctx.fileWriter.write(
-      join(ctx.repoRoot, '.github/workflows/review-agent-rerun.yml'),
-      buildRerunWorkflow(),
-    );
+    // 2. Build the prompt with reference context
+    const basePrompt = buildReviewAgentPrompt(detection, userPreferences);
+    const prompt = `${basePrompt}
 
-    // ── 3. Auto-resolve threads workflow ────────────────────────────────
-    await ctx.fileWriter.write(
-      join(ctx.repoRoot, '.github/workflows/auto-resolve-threads.yml'),
-      buildAutoResolveWorkflow(),
-    );
+## Reference Implementation
 
-    // ── 4. Review agent utils script ────────────────────────────────────
-    await ctx.fileWriter.write(
-      join(ctx.repoRoot, 'scripts/review-agent-utils.ts'),
-      buildReviewAgentUtils(),
-    );
+Use these as your structural template. Keep the same patterns but customize all
+language setup, install commands, test/lint/build commands, and tooling for the
+detected stack.
 
-    // ── 5. Review prompt ────────────────────────────────────────────────
-    await ctx.fileWriter.write(join(ctx.repoRoot, 'scripts/review-prompt.md'), buildReviewPrompt());
+### Reference: .github/workflows/code-review-agent.yml
+\`\`\`yaml
+${refCodeReviewWorkflow}
+\`\`\`
 
-    // ── 6. Codefactory review agent prompt ──────────────────────────────
-    await ctx.fileWriter.write(
-      join(ctx.repoRoot, '.codefactory/prompts/review-agent.md'),
-      buildCodefactoryPrompt(),
-    );
+### Reference: .github/workflows/review-agent-rerun.yml
+\`\`\`yaml
+${refRerunWorkflow}
+\`\`\`
 
-    const diff = ctx.fileWriter.diffSince(snap);
+### Reference: .github/workflows/auto-resolve-threads.yml
+\`\`\`yaml
+${refAutoResolveWorkflow}
+\`\`\`
 
-    const output: HarnessOutput = {
-      harnessName: 'review-agent',
-      filesCreated: diff.created,
-      filesModified: diff.modified,
-      metadata: {
-        codeReviewWorkflowPath: '.github/workflows/code-review-agent.yml',
-        rerunWorkflowPath: '.github/workflows/review-agent-rerun.yml',
-        autoResolveWorkflowPath: '.github/workflows/auto-resolve-threads.yml',
-        utilsPath: 'scripts/review-agent-utils.ts',
-        promptFile: '.codefactory/prompts/review-agent.md',
-      },
-    };
+### Reference: scripts/review-agent-utils.ts
+\`\`\`typescript
+${refReviewAgentUtils}
+\`\`\`
 
-    ctx.previousOutputs.set('review-agent', output);
+### Reference: scripts/review-prompt.md
+\`\`\`markdown
+${refReviewPrompt}
+\`\`\`
 
-    return output;
+### Reference: .codefactory/prompts/review-agent.md
+\`\`\`markdown
+${refCodefactoryPrompt}
+\`\`\``;
+
+    // 3. Call Claude runner
+    const systemPrompt = buildSystemPrompt();
+    try {
+      const result = await ctx.runner.generate(prompt, systemPrompt);
+      const output: HarnessOutput = {
+        harnessName: 'review-agent',
+        filesCreated: result.filesCreated,
+        filesModified: result.filesModified,
+        metadata: { reviewWorkflowPath: '.github/workflows/code-review.yml' },
+      };
+      ctx.previousOutputs.set('review-agent', output);
+      return output;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Review agent generation failed: ${message}`);
+    }
   },
 };
 

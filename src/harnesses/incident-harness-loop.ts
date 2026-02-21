@@ -1,6 +1,6 @@
-import { join } from 'node:path';
-
 import type { HarnessModule, HarnessContext, HarnessOutput } from './types.js';
+import { buildIncidentHarnessLoopPrompt } from '../prompts/incident-harness-loop.js';
+import { buildSystemPrompt } from '../prompts/system.js';
 
 export const incidentHarnessLoopHarness: HarnessModule = {
   name: 'incident-harness-loop',
@@ -13,182 +13,205 @@ export const incidentHarnessLoopHarness: HarnessModule = {
   },
 
   async execute(ctx: HarnessContext): Promise<HarnessOutput> {
-    const snap = ctx.fileWriter.snapshot();
+    const { detection, userPreferences } = ctx;
 
-    // ── .github/ISSUE_TEMPLATE/harness-gap.md ─────────────────────────────
-    const harnessGapTemplate = [
-      '---',
-      'name: Harness Gap Report',
-      'about: Convert a production regression into a harness improvement',
-      'title: "[HARNESS GAP] "',
-      'labels: harness-gap, quality',
-      "assignees: ''",
-      '---',
-      '',
-      '## Incident Summary',
-      '',
-      '<!-- What happened in production? Include date, severity, and user impact. -->',
-      '',
-      '## Root Cause',
-      '',
-      '<!-- Why did this happen? What was the underlying defect? -->',
-      '',
-      '## What Should Have Caught It',
-      '',
-      'Which harness layer should have prevented this regression?',
-      '',
-      '- [ ] Pre-commit hooks',
-      '- [ ] Risk policy gate',
-      '- [ ] CI pipeline (lint / type-check / test / build)',
-      '- [ ] Review agent',
-      '- [ ] Browser evidence',
-      '- [ ] Architectural linter (boundary violations)',
-      '- [ ] Structural tests (harness smoke)',
-      '- [ ] Other: ___',
-      '',
-      '## Proposed Harness Improvement',
-      '',
-      '<!-- What specific check, test, rule, or gate should be added or strengthened? -->',
-      '',
-      '## Affected Critical Paths',
-      '',
-      '<!-- Which paths from harness.config.json are affected? Check all that apply. -->',
-      '',
-      '- [ ] `src/index.ts`',
-      '- [ ] `src/cli.ts`',
-      '- [ ] `src/commands/init.ts`',
-      '- [ ] `src/core/claude-runner.ts`',
-      '- [ ] `src/core/config.ts`',
-      '- [ ] `src/core/detector.ts`',
-      '- [ ] `src/core/file-writer.ts`',
-      '- [ ] `src/harnesses/index.ts`',
-      '- [ ] `src/harnesses/types.ts`',
-      '- [ ] `package.json`',
-      '- [ ] `tsconfig.json`',
-      '- [ ] `tsup.config.ts`',
-      '- [ ] `vitest.config.ts`',
-      '- [ ] `eslint.config.js`',
-      '- [ ] None of the above (new critical path needed)',
-      '',
-      '## SLO Target',
-      '',
-      '- [ ] **P0**: Within 24 hours (active production breakage)',
-      '- [ ] **P1**: Within 1 week (high-risk gap, could recur)',
-      '- [ ] **P2**: Within 1 sprint (medium-risk, workaround exists)',
-      '- [ ] **P3**: Next planning cycle (low-risk, defense-in-depth)',
-      '',
-      '## Test Case Specification',
-      '',
-      'Describe the test that would catch this regression going forward:',
-      '',
-      '- **Input / preconditions**: <!-- e.g., "A PR that modifies src/core/config.ts without updating the Zod schema" -->',
-      '- **Expected behavior**: <!-- e.g., "CI fails at type-check or structural-tests step" -->',
-      '- **Actual behavior**: <!-- e.g., "PR merged without catching the schema mismatch" -->',
-      '- **Files to test**: <!-- e.g., "src/core/config.ts, tests/core/config.test.ts" -->',
-      '',
-      '## Evidence',
-      '',
-      '<!-- Links to incident reports, error logs, screenshots, or related PRs/issues. -->',
-      '',
-      '---',
-      '',
-      '> **Process**: After filing this issue, add a priority label (`P0`/`P1`/`P2`/`P3`) and update [docs/harness-gaps.md](../../docs/harness-gaps.md). See the [incident-to-harness loop process](../../docs/harness-gaps.md#process) for next steps.',
-      '',
-    ].join('\n');
+    // 1. Generate reference templates from existing builders / inline content
+    const refIssueTemplate = buildHarnessGapTemplate();
+    const refTrackingDoc = buildHarnessGapsDoc();
+    const refMetricsWorkflow = buildWeeklyMetricsYml();
 
-    await ctx.fileWriter.write(
-      join(ctx.repoRoot, '.github', 'ISSUE_TEMPLATE', 'harness-gap.md'),
-      harnessGapTemplate,
-    );
+    // 2. Build the prompt with reference context
+    const basePrompt = buildIncidentHarnessLoopPrompt(detection, userPreferences);
+    const prompt = `${basePrompt}
 
-    // ── docs/harness-gaps.md ──────────────────────────────────────────────
-    const harnessGapsDoc = [
-      '# Harness Gap Tracker',
-      '',
-      'Tracks gaps identified in the harness engineering setup through production incidents. Each gap represents a regression that our harness system should have prevented.',
-      '',
-      '## Metrics',
-      '',
-      '| Metric | Target | Current |',
-      '|--------|--------|---------|',
-      '| Mean time to harness (MTTH) | < 7 days | - |',
-      '| Open P0 gaps | 0 | 0 |',
-      '| Open P1 gaps | < 3 | 0 |',
-      '| Gap close rate (monthly) | > 80% | - |',
-      '| Repeat regression rate | 0% | 0% |',
-      '',
-      '> Updated weekly by the [weekly-metrics workflow](../.github/workflows/weekly-metrics.yml). Run manually via `workflow_dispatch` for on-demand updates.',
-      '',
-      '## SLO Definitions',
-      '',
-      '| Priority | SLO | Description |',
-      '|----------|-----|-------------|',
-      '| **P0** | 24 hours | Active production breakage. Drop everything. |',
-      '| **P1** | 1 week | High-risk gap that could recur imminently. |',
-      '| **P2** | 1 sprint | Medium-risk gap with a known workaround. |',
-      '| **P3** | Next planning cycle | Defense-in-depth improvement, low urgency. |',
-      '',
-      '## Open Gaps',
-      '',
-      '<!-- Auto-updated by weekly-metrics workflow. Manual edits are overwritten. -->',
-      '',
-      '| # | Title | Priority | Layer | Created | SLO Due |',
-      '|---|-------|----------|-------|---------|---------|',
-      '| - | No open gaps | - | - | - | - |',
-      '',
-      '## Closed Gaps',
-      '',
-      '| # | Title | Layer | Resolution | Closed |',
-      '|---|-------|-------|------------|--------|',
-      '| - | No closed gaps yet | - | - | - |',
-      '',
-      '## Process',
-      '',
-      '1. **Report**: When a production incident occurs, create a [Harness Gap issue](../.github/ISSUE_TEMPLATE/harness-gap.md) using the template.',
-      '2. **Triage**: Add a priority label (`P0`\u2013`P3`) and identify the harness layer that should have caught it.',
-      '3. **Implement**: Add the missing test, rule, or gate. Reference the gap issue in the PR.',
-      '4. **Verify**: Confirm the new harness check would have caught the original regression (re-run against the offending commit if possible).',
-      '5. **Close**: Close the issue and update this tracker.',
-      '6. **Review**: Weekly metrics report verifies SLO compliance and flags overdue gaps.',
-      '',
-      '## Harness Layers Reference',
-      '',
-      '| Layer | Catches | Examples |',
-      '|-------|---------|----------|',
-      '| Pre-commit hooks | Local quality issues before push | Formatting, lint errors, type errors |',
-      '| Risk policy gate | Mis-classified PR risk | Tier 3 change merged without manual review |',
-      '| CI pipeline | Build/test/lint failures | Broken tests, type errors, lint violations |',
-      '| Review agent | Logic errors, missing tests | Untested edge case, missing error handling |',
-      '| Browser evidence | Visual/UX regressions | Broken layout, missing UI element |',
-      '| Architectural linter | Boundary violations | Core importing from UI, circular deps |',
-      '| Structural tests | Harness config drift | Missing critical file, invalid config schema |',
-      '',
-    ].join('\n');
+## Reference Implementation
 
-    await ctx.fileWriter.write(join(ctx.repoRoot, 'docs', 'harness-gaps.md'), harnessGapsDoc);
+Use these as your structural template. Keep the same patterns but customize all
+language setup, install commands, test/lint/build commands, and tooling for the
+detected stack.
 
-    // ── .github/workflows/weekly-metrics.yml ──────────────────────────────
-    const weeklyMetricsWorkflow = buildWeeklyMetricsYml();
+### Reference: .github/ISSUE_TEMPLATE/harness-gap.md
+\`\`\`markdown
+${refIssueTemplate}
+\`\`\`
 
-    await ctx.fileWriter.write(
-      join(ctx.repoRoot, '.github', 'workflows', 'weekly-metrics.yml'),
-      weeklyMetricsWorkflow,
-    );
+### Reference: docs/harness-gaps.md
+\`\`\`markdown
+${refTrackingDoc}
+\`\`\`
 
-    const diff = ctx.fileWriter.diffSince(snap);
-    const output: HarnessOutput = {
-      harnessName: 'incident-harness-loop',
-      filesCreated: diff.created,
-      filesModified: diff.modified,
-    };
+### Reference: .github/workflows/weekly-metrics.yml
+\`\`\`yaml
+${refMetricsWorkflow}
+\`\`\``;
 
-    ctx.previousOutputs.set('incident-harness-loop', output);
-
-    return output;
+    // 3. Call Claude runner
+    const systemPrompt = buildSystemPrompt();
+    try {
+      const result = await ctx.runner.generate(prompt, systemPrompt);
+      const output: HarnessOutput = {
+        harnessName: 'incident-harness-loop',
+        filesCreated: result.filesCreated,
+        filesModified: result.filesModified,
+        metadata: { templatePath: '.github/ISSUE_TEMPLATE/' },
+      };
+      ctx.previousOutputs.set('incident-harness-loop', output);
+      return output;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Incident harness loop generation failed: ${message}`);
+    }
   },
 };
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
+
+function buildHarnessGapTemplate(): string {
+  return [
+    '---',
+    'name: Harness Gap Report',
+    'about: Convert a production regression into a harness improvement',
+    'title: "[HARNESS GAP] "',
+    'labels: harness-gap, quality',
+    "assignees: ''",
+    '---',
+    '',
+    '## Incident Summary',
+    '',
+    '<!-- What happened in production? Include date, severity, and user impact. -->',
+    '',
+    '## Root Cause',
+    '',
+    '<!-- Why did this happen? What was the underlying defect? -->',
+    '',
+    '## What Should Have Caught It',
+    '',
+    'Which harness layer should have prevented this regression?',
+    '',
+    '- [ ] Pre-commit hooks',
+    '- [ ] Risk policy gate',
+    '- [ ] CI pipeline (lint / type-check / test / build)',
+    '- [ ] Review agent',
+    '- [ ] Browser evidence',
+    '- [ ] Architectural linter (boundary violations)',
+    '- [ ] Structural tests (harness smoke)',
+    '- [ ] Other: ___',
+    '',
+    '## Proposed Harness Improvement',
+    '',
+    '<!-- What specific check, test, rule, or gate should be added or strengthened? -->',
+    '',
+    '## Affected Critical Paths',
+    '',
+    '<!-- Which paths from harness.config.json are affected? Check all that apply. -->',
+    '',
+    '- [ ] `src/index.ts`',
+    '- [ ] `src/cli.ts`',
+    '- [ ] `src/commands/init.ts`',
+    '- [ ] `src/core/claude-runner.ts`',
+    '- [ ] `src/core/config.ts`',
+    '- [ ] `src/core/detector.ts`',
+    '- [ ] `src/core/file-writer.ts`',
+    '- [ ] `src/harnesses/index.ts`',
+    '- [ ] `src/harnesses/types.ts`',
+    '- [ ] `package.json`',
+    '- [ ] `tsconfig.json`',
+    '- [ ] `tsup.config.ts`',
+    '- [ ] `vitest.config.ts`',
+    '- [ ] `eslint.config.js`',
+    '- [ ] None of the above (new critical path needed)',
+    '',
+    '## SLO Target',
+    '',
+    '- [ ] **P0**: Within 24 hours (active production breakage)',
+    '- [ ] **P1**: Within 1 week (high-risk gap, could recur)',
+    '- [ ] **P2**: Within 1 sprint (medium-risk, workaround exists)',
+    '- [ ] **P3**: Next planning cycle (low-risk, defense-in-depth)',
+    '',
+    '## Test Case Specification',
+    '',
+    'Describe the test that would catch this regression going forward:',
+    '',
+    '- **Input / preconditions**: <!-- e.g., "A PR that modifies src/core/config.ts without updating the Zod schema" -->',
+    '- **Expected behavior**: <!-- e.g., "CI fails at type-check or structural-tests step" -->',
+    '- **Actual behavior**: <!-- e.g., "PR merged without catching the schema mismatch" -->',
+    '- **Files to test**: <!-- e.g., "src/core/config.ts, tests/core/config.test.ts" -->',
+    '',
+    '## Evidence',
+    '',
+    '<!-- Links to incident reports, error logs, screenshots, or related PRs/issues. -->',
+    '',
+    '---',
+    '',
+    '> **Process**: After filing this issue, add a priority label (`P0`/`P1`/`P2`/`P3`) and update [docs/harness-gaps.md](../../docs/harness-gaps.md). See the [incident-to-harness loop process](../../docs/harness-gaps.md#process) for next steps.',
+    '',
+  ].join('\n');
+}
+
+function buildHarnessGapsDoc(): string {
+  return [
+    '# Harness Gap Tracker',
+    '',
+    'Tracks gaps identified in the harness engineering setup through production incidents. Each gap represents a regression that our harness system should have prevented.',
+    '',
+    '## Metrics',
+    '',
+    '| Metric | Target | Current |',
+    '|--------|--------|---------|',
+    '| Mean time to harness (MTTH) | < 7 days | - |',
+    '| Open P0 gaps | 0 | 0 |',
+    '| Open P1 gaps | < 3 | 0 |',
+    '| Gap close rate (monthly) | > 80% | - |',
+    '| Repeat regression rate | 0% | 0% |',
+    '',
+    '> Updated weekly by the [weekly-metrics workflow](../.github/workflows/weekly-metrics.yml). Run manually via `workflow_dispatch` for on-demand updates.',
+    '',
+    '## SLO Definitions',
+    '',
+    '| Priority | SLO | Description |',
+    '|----------|-----|-------------|',
+    '| **P0** | 24 hours | Active production breakage. Drop everything. |',
+    '| **P1** | 1 week | High-risk gap that could recur imminently. |',
+    '| **P2** | 1 sprint | Medium-risk gap with a known workaround. |',
+    '| **P3** | Next planning cycle | Defense-in-depth improvement, low urgency. |',
+    '',
+    '## Open Gaps',
+    '',
+    '<!-- Auto-updated by weekly-metrics workflow. Manual edits are overwritten. -->',
+    '',
+    '| # | Title | Priority | Layer | Created | SLO Due |',
+    '|---|-------|----------|-------|---------|---------|',
+    '| - | No open gaps | - | - | - | - |',
+    '',
+    '## Closed Gaps',
+    '',
+    '| # | Title | Layer | Resolution | Closed |',
+    '|---|-------|-------|------------|--------|',
+    '| - | No closed gaps yet | - | - | - |',
+    '',
+    '## Process',
+    '',
+    '1. **Report**: When a production incident occurs, create a [Harness Gap issue](../.github/ISSUE_TEMPLATE/harness-gap.md) using the template.',
+    '2. **Triage**: Add a priority label (`P0`\u2013`P3`) and identify the harness layer that should have caught it.',
+    '3. **Implement**: Add the missing test, rule, or gate. Reference the gap issue in the PR.',
+    '4. **Verify**: Confirm the new harness check would have caught the original regression (re-run against the offending commit if possible).',
+    '5. **Close**: Close the issue and update this tracker.',
+    '6. **Review**: Weekly metrics report verifies SLO compliance and flags overdue gaps.',
+    '',
+    '## Harness Layers Reference',
+    '',
+    '| Layer | Catches | Examples |',
+    '|-------|---------|----------|',
+    '| Pre-commit hooks | Local quality issues before push | Formatting, lint errors, type errors |',
+    '| Risk policy gate | Mis-classified PR risk | Tier 3 change merged without manual review |',
+    '| CI pipeline | Build/test/lint failures | Broken tests, type errors, lint violations |',
+    '| Review agent | Logic errors, missing tests | Untested edge case, missing error handling |',
+    '| Browser evidence | Visual/UX regressions | Broken layout, missing UI element |',
+    '| Architectural linter | Boundary violations | Core importing from UI, circular deps |',
+    '| Structural tests | Harness config drift | Missing critical file, invalid config schema |',
+    '',
+  ].join('\n');
+}
 
 function buildWeeklyMetricsYml(): string {
   /* eslint-disable no-useless-escape */
