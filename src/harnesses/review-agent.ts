@@ -21,7 +21,6 @@ export const reviewAgentHarness: HarnessModule = {
     const refRerunWorkflow = buildRerunWorkflow();
     const refAutoResolveWorkflow = buildAutoResolveWorkflow();
     const refReviewAgentUtils = buildReviewAgentUtils();
-    const refReviewPrompt = buildReviewPrompt();
     const refCodefactoryPrompt = buildCodefactoryPrompt();
 
     // 2. Build the prompt with reference context
@@ -54,11 +53,6 @@ ${refAutoResolveWorkflow}
 ${refReviewAgentUtils}
 \`\`\`
 
-### Reference: scripts/review-prompt.md
-\`\`\`markdown
-${refReviewPrompt}
-\`\`\`
-
 ### Reference: .codefactory/prompts/review-agent.md
 \`\`\`markdown
 ${refCodefactoryPrompt}
@@ -72,7 +66,7 @@ ${refCodefactoryPrompt}
         harnessName: 'review-agent',
         filesCreated: result.filesCreated,
         filesModified: result.filesModified,
-        metadata: { reviewWorkflowPath: '.github/workflows/code-review.yml' },
+        metadata: { reviewWorkflowPath: '.github/workflows/code-review-agent.yml' },
       };
       ctx.previousOutputs.set('review-agent', output);
       return output;
@@ -208,6 +202,53 @@ function buildCodeReviewWorkflow(): string {
     "        if: steps.tier.outputs.tier == '1'",
     '        run: echo "Tier 1 change — review agent not required. Skipping."',
     '',
+    '      - name: Notify PR — review agent skipped (Tier 1)',
+    "        if: steps.tier.outputs.tier == '1'",
+    '        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1',
+    '        env:',
+    '          HEAD_SHA: ${{ steps.pr.outputs.head-sha }}',
+    '          PR_NUMBER: ${{ steps.pr.outputs.pr-number }}',
+    '        with:',
+    '          script: |',
+    '            const headSha = process.env.HEAD_SHA;',
+    '            const prNumber = parseInt(process.env.PR_NUMBER, 10);',
+    '            const marker = `<!-- harness-tier1-skip: ${headSha} -->`;',
+    '',
+    '            // Deduplicate: only post once per SHA',
+    '            const { data: comments } = await github.rest.issues.listComments({',
+    '              owner: context.repo.owner,',
+    '              repo: context.repo.repo,',
+    '              issue_number: prNumber,',
+    '              per_page: 100,',
+    '            });',
+    '',
+    '            if (comments.some((c) => c.body?.includes(marker))) {',
+    '              core.info(`Tier 1 skip notification already posted for SHA ${headSha.slice(0, 12)} — skipping.`);',
+    '              return;',
+    '            }',
+    '',
+    '            await github.rest.issues.createComment({',
+    '              owner: context.repo.owner,',
+    '              repo: context.repo.repo,',
+    '              issue_number: prNumber,',
+    '              body: [',
+    '                marker,',
+    '                `## ℹ️ Review Agent — Skipped (Tier 1)`,',
+    "                '',",
+    '                `**Commit**: \\`${headSha.slice(0, 12)}\\``,',
+    '                `**Tier**: 1 (low risk — documentation / non-code changes)`,',
+    "                '',",
+    "                'This pull request only touches **Tier 1** files (documentation, configuration cosmetics, non-code assets). The automated code review agent does not run for Tier 1 changes — they are considered low-risk and only require lint checks.',",
+    "                '',",
+    "                'If this PR should be reviewed, you can manually trigger the review workflow from the **Actions** tab.',",
+    "                '',",
+    "                '---',",
+    "                '*🤖 [Code Review Agent](https://github.com/codefactory) — automated code review.*',",
+    "              ].join('\\n'),",
+    '            });',
+    '',
+    '            core.info(`Posted Tier 1 skip notification for SHA ${headSha.slice(0, 12)}.`);',
+    '',
     '      - name: SHA deduplication check',
     "        if: steps.tier.outputs.tier != '1'",
     '        id: dedup',
@@ -269,7 +310,7 @@ function buildCodeReviewWorkflow(): string {
     '        run: |',
     '          # Read from origin/main — not from the PR branch — so the prompt',
     "          # stays up-to-date even for PRs that don't include prompt changes.",
-    '          PROMPT_CONTENT=$(git show origin/main:scripts/review-prompt.md 2>/dev/null || echo "")',
+    '          PROMPT_CONTENT=$(git show origin/main:.codefactory/prompts/review-agent.md 2>/dev/null || echo "")',
     '          if [[ -n "$PROMPT_CONTENT" ]]; then',
     '            {',
     '              echo "content<<PROMPT_EOF"',
@@ -1195,111 +1236,6 @@ function buildReviewAgentUtils(): string {
     '}',
   ];
   return lines.join('\n') + '\n';
-}
-
-function buildReviewPrompt(): string {
-  return `# Code Review Agent — Review Prompt
-
-You are a senior TypeScript engineer performing an automated code review on a pull request. Your review must be thorough, actionable, and focused on substance over style.
-
-## Your Role
-
-- Review the PR diff for correctness, security, and architectural compliance.
-- The linter and formatter handle style — do not comment on formatting, whitespace, or import order.
-- Focus on bugs, security vulnerabilities, data integrity risks, and architectural violations.
-- This project uses **relaxed** strictness: only bugs and security issues are blocking. All other findings are informational.
-
-## Severity Classification
-
-Classify every finding into exactly one severity:
-
-### Blocking (must fix before merge)
-
-- Security vulnerabilities (injection, XSS, SSRF, auth bypass, secret exposure)
-- Bugs that will cause runtime errors, data loss, or incorrect behavior
-- Unhandled error paths that could crash the process
-- Shell command injection via unsanitized input (this project spawns \`claude\` as child process)
-
-### Warning (should fix)
-
-- Architectural boundary violations (see boundaries below)
-- Missing error handling for async operations
-- Missing or inadequate test coverage for changed logic
-- Type safety issues: \`any\` usage, unchecked casts, missing null checks
-- Missing \`.js\` extensions on local ESM imports (enforced by \`verbatimModuleSyntax\`)
-
-### Suggestion (nice to have)
-
-- Performance improvements
-- Cleaner patterns or abstractions
-- Better variable naming or documentation
-- Opportunities for code reuse
-
-## TypeScript-Specific Checks
-
-- **Type safety**: Flag \`any\` usage, unchecked type assertions (\`as\`), missing null/undefined checks.
-- **Error handling**: Every \`catch\` block should handle errors with the pattern \`error instanceof Error ? error.message : String(error)\`. No bare \`catch {}\`.
-- **ESM discipline**: Local imports must use \`.js\` extensions. \`import type\` must be separate from value imports (\`verbatimModuleSyntax\`).
-- **Async safety**: Verify all Promises are awaited or explicitly handled. No fire-and-forget.
-- **Input validation**: External input at system boundaries must be validated with Zod schemas.
-
-## Architectural Boundary Rules
-
-This project enforces strict import boundaries between layers:
-
-| Layer       | Allowed Imports                         |
-| ----------- | --------------------------------------- |
-| \`utils\`     | (nothing)                               |
-| \`ui\`        | \`utils\`                                 |
-| \`core\`      | \`utils\`                                 |
-| \`commands\`  | \`core\`, \`ui\`, \`utils\`                   |
-| \`prompts\`   | \`core\`, \`utils\`                         |
-| \`providers\` | \`core\`, \`utils\`                         |
-| \`harnesses\` | \`core\`, \`prompts\`, \`providers\`, \`utils\` |
-
-Flag any import that violates these boundaries. Never import from \`commands\` or \`harnesses\` inside \`core\`.
-
-## Review Constraints
-
-- Do NOT suggest changes that contradict the project's CLAUDE.md conventions.
-- Do NOT flag issues already caught by eslint or the TypeScript compiler.
-- Do NOT comment on test file style — test files have more flexibility.
-- Keep findings concise: one sentence per issue, with file and line reference.
-
-## Output Format
-
-Write your review in natural markdown. Structure it as follows:
-
-### Summary
-
-One paragraph summarizing the changes and their purpose.
-
-### Risk Assessment
-
-State the confirmed risk tier (Tier 1/2/3) and briefly explain why.
-
-### Issues
-
-If you found issues, list them as a numbered list. For each issue include:
-
-- **Severity** (blocking / warning / suggestion)
-- **Location** (\`file:line\`)
-- **Description** — what is wrong and how to fix it
-
-If no issues were found, say so explicitly.
-
-### Architecture
-
-Note whether the changes comply with the architectural boundary rules. Flag any violations.
-
-### Test Coverage
-
-Briefly assess whether test coverage is adequate for the changes.
-
-## Automated Feedback Loop
-
-Your review will be read by a separate verdict classifier that decides whether to approve, request changes, or leave a comment. If changes are requested, an automated implementer agent will attempt to fix the blocking issues you describe. So for any blocking issue, be precise: include the exact file path, line number, and a clear description of what is wrong and how to fix it. The implementer cannot fix vague feedback like "improve error handling" — it needs specific locations and actionable instructions.
-`;
 }
 
 function buildCodefactoryPrompt(): string {
