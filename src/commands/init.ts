@@ -8,12 +8,11 @@ import { confirmPrompt, selectPrompt, multiselectPrompt, inputPrompt } from '../
 import { isGitRepo, getRepoRoot } from '../utils/git.js';
 import { readFileIfExists } from '../utils/fs.js';
 import { NotAGitRepoError } from '../utils/errors.js';
-import { ClaudeRunner } from '../core/claude-runner.js';
 import { FileWriter } from '../core/file-writer.js';
 import { loadHarnessConfig, saveHarnessConfig } from '../core/config.js';
 import type { HarnessConfig } from '../core/config.js';
-import { runHeuristicDetection, runFullDetection } from '../core/detector.js';
-import type { DetectionResult, HeuristicResult } from '../core/detector.js';
+import { runHeuristicDetection } from '../core/detector.js';
+import type { DetectionResult } from '../core/detector.js';
 import { getHarnessModules } from '../harnesses/index.js';
 import type { HarnessContext, HarnessOutput, UserPreferences } from '../harnesses/types.js';
 
@@ -74,27 +73,16 @@ export async function initCommand(options: InitOptions): Promise<void> {
   }
 
   // ── 2. Detection phase ───────────────────────────────────────────────
-  const heuristics = await withSpinner('Running heuristic analysis...', () =>
+  const detection = await withSpinner('Analyzing repository...', () =>
     runHeuristicDetection(repoRoot),
   );
-
-  let detection: DetectionResult;
-
-  if (!options.skipDetection) {
-    const runner = new ClaudeRunner({ cwd: repoRoot });
-    detection = await withSpinner('Analyzing repository with Claude (deep detection)...', () =>
-      runFullDetection(repoRoot, runner),
-    );
-  } else {
-    detection = heuristicToDetectionResult(heuristics);
-  }
 
   // ── 3. User preferences ──────────────────────────────────────────────
   displayDetectionSummary(detection);
 
   const detectionOk = await confirmPrompt('Does this detection look correct?', true);
   if (!detectionOk) {
-    detection = await correctDetection(detection);
+    await correctDetection(detection);
   }
 
   const ciProvider = await selectPrompt<UserPreferences['ciProvider']>(
@@ -139,7 +127,6 @@ export async function initCommand(options: InitOptions): Promise<void> {
   const tempCtx: HarnessContext = {
     repoRoot,
     detection,
-    runner: new ClaudeRunner({ cwd: repoRoot }),
     fileWriter: new FileWriter(),
     userPreferences: {
       ciProvider,
@@ -209,14 +196,12 @@ export async function initCommand(options: InitOptions): Promise<void> {
   }
 
   // ── 4. Harness execution ─────────────────────────────────────────────
-  const runner = new ClaudeRunner({ cwd: repoRoot });
   const fileWriter = new FileWriter();
   const previousOutputs = new Map<string, HarnessOutput>();
 
   const ctx: HarnessContext = {
     repoRoot,
     detection,
-    runner,
     fileWriter,
     userPreferences,
     previousOutputs,
@@ -357,29 +342,6 @@ export async function initCommand(options: InitOptions): Promise<void> {
 
 // ── Helper functions ──────────────────────────────────────────────────────
 
-function heuristicToDetectionResult(h: HeuristicResult): DetectionResult {
-  return {
-    primaryLanguage: h.languages[0] ?? 'unknown',
-    framework: h.framework,
-    packageManager: h.packageManager,
-    testFramework: null,
-    linter: null,
-    formatter: null,
-    typeChecker: h.hasTypeScript ? 'TypeScript' : null,
-    buildTool: null,
-    ciProvider: h.ciProvider,
-    existingDocs: h.existingDocs,
-    existingClaude: h.existingClaude,
-    architecturalLayers: [],
-    monorepo: h.monorepoIndicators,
-    testCommand: null,
-    buildCommand: null,
-    lintCommand: null,
-    hasUIComponents: false,
-    criticalPaths: [],
-  };
-}
-
 function displayDetectionSummary(d: DetectionResult): void {
   console.log();
   logger.info('Detection results:');
@@ -395,6 +357,12 @@ function displayDetectionSummary(d: DetectionResult): void {
   logger.dim(`  Monorepo:        ${d.monorepo ? 'yes' : 'no'}`);
   logger.dim(`  UI components:   ${d.hasUIComponents ? 'yes' : 'no'}`);
   if (d.existingClaude) logger.dim('  Existing CLAUDE.md detected');
+  if (d.architecturalLayers.length > 0) {
+    logger.dim(`  Layers:          ${d.architecturalLayers.join(', ')}`);
+  }
+  if (d.criticalPaths.length > 0) {
+    logger.dim(`  Critical paths:  ${d.criticalPaths.length} detected`);
+  }
   console.log();
 }
 
