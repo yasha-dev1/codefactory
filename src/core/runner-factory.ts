@@ -1,4 +1,4 @@
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 
 import type { AIPlatform, AIRunner } from './ai-runner.js';
 import { ClaudeRunner } from './claude-runner.js';
@@ -36,7 +36,7 @@ export function createRunner(platform: AIPlatform, options?: AIRunnerOptions): A
 export function validatePlatformCLI(platform: AIPlatform): void {
   const binary = PLATFORM_BINARIES[platform];
   try {
-    execSync(`which ${binary}`, { stdio: 'ignore' });
+    execFileSync('which', [binary], { stdio: 'ignore' });
   } catch {
     throw new PlatformCLINotFoundError(platform, binary);
   }

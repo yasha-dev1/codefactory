@@ -3,13 +3,13 @@ import { ClaudeRunner } from '../../src/core/claude-runner.js';
 import { KiroRunner } from '../../src/core/kiro-runner.js';
 import { CodexRunner } from '../../src/core/codex-runner.js';
 import { PlatformCLINotFoundError } from '../../src/utils/errors.js';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 
 vi.mock('node:child_process', () => ({
-  execSync: vi.fn(),
+  execFileSync: vi.fn(),
 }));
 
-const mockedExecSync = vi.mocked(execSync);
+const mockedExecFileSync = vi.mocked(execFileSync);
 
 describe('createRunner', () => {
   it('should return ClaudeRunner for claude platform', () => {
@@ -47,13 +47,13 @@ describe('validatePlatformCLI', () => {
   });
 
   it('should not throw when CLI binary is found', () => {
-    mockedExecSync.mockReturnValue(Buffer.from('/usr/local/bin/claude'));
+    mockedExecFileSync.mockReturnValue(Buffer.from('/usr/local/bin/claude'));
     expect(() => validatePlatformCLI('claude')).not.toThrow();
-    expect(mockedExecSync).toHaveBeenCalledWith('which claude', { stdio: 'ignore' });
+    expect(mockedExecFileSync).toHaveBeenCalledWith('which', ['claude'], { stdio: 'ignore' });
   });
 
   it('should throw PlatformCLINotFoundError when CLI binary is not found', () => {
-    mockedExecSync.mockImplementation(() => {
+    mockedExecFileSync.mockImplementation(() => {
       throw new Error('not found');
     });
 
@@ -62,7 +62,7 @@ describe('validatePlatformCLI', () => {
   });
 
   it('should include install instructions in error message', () => {
-    mockedExecSync.mockImplementation(() => {
+    mockedExecFileSync.mockImplementation(() => {
       throw new Error('not found');
     });
 

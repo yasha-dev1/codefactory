@@ -1,6 +1,4 @@
-import { spawn } from 'child_process';
 import type { z } from 'zod';
-import chalk from 'chalk';
 
 import type { AIRunner, AIPlatform, GenerateResult } from './ai-runner.js';
 
@@ -10,26 +8,14 @@ export interface KiroRunnerOptions {
   cwd?: string;
 }
 
-interface StreamMessage {
-  type: string;
-  subtype?: string;
-  result?: string;
-  message?: {
-    content: Array<{
-      type: string;
-      text?: string;
-      name?: string;
-      input?: Record<string, unknown>;
-    }>;
-  };
-}
-
-interface RunResult {
-  resultText: string;
-  filesCreated: string[];
-  filesModified: string[];
-}
-
+/**
+ * Stub implementation for the AWS Kiro CLI.
+ *
+ * Kiro's CLI protocol has not been publicly documented yet, so this runner
+ * validates that the binary exists but throws a clear error if anyone tries
+ * to call `analyze()` or `generate()`.  Once Kiro publishes a stable
+ * streaming output format we can implement the full integration.
+ */
 export class KiroRunner implements AIRunner {
   readonly platform: AIPlatform = 'kiro';
   private readonly options: KiroRunnerOptions;
@@ -38,207 +24,19 @@ export class KiroRunner implements AIRunner {
     this.options = options;
   }
 
-  async analyze<T>(prompt: string, schema: z.ZodType<T>): Promise<T> {
-    const systemPrompt = [
-      'You are a repository analysis assistant.',
-      'Analyze the repository and return your findings as structured JSON.',
-      'Your final response MUST be valid JSON matching the requested schema.',
-      'Do not wrap the JSON in markdown code fences.',
-      this.options.systemPrompt,
-    ]
-      .filter(Boolean)
-      .join('\n');
-
-    const result = await this.run(prompt, {
-      systemPrompt,
-      maxTurns: this.options.maxTurns ?? 20,
-      allowedTools: ['Read', 'Glob', 'Grep', 'Bash'],
-    });
-
-    const jsonStr = extractJson(result.resultText);
-    const parsed = JSON.parse(jsonStr) as unknown;
-    return schema.parse(parsed);
+  async analyze<T>(_prompt: string, _schema: z.ZodType<T>): Promise<T> {
+    throw new Error(
+      'Kiro CLI integration is not yet available. ' +
+        'The Kiro streaming protocol has not been publicly documented. ' +
+        'Please use Claude Code (claude) as the AI platform for now.',
+    );
   }
 
-  async generate(prompt: string, systemPromptAppend?: string): Promise<GenerateResult> {
-    const systemPrompt = [this.options.systemPrompt, systemPromptAppend].filter(Boolean).join('\n');
-
-    const result = await this.run(prompt, {
-      systemPrompt: systemPrompt || undefined,
-      maxTurns: this.options.maxTurns ?? 30,
-      allowedTools: ['Read', 'Glob', 'Grep', 'Write', 'Edit', 'Bash'],
-    });
-
-    return {
-      filesCreated: result.filesCreated,
-      filesModified: result.filesModified,
-    };
+  async generate(_prompt: string, _systemPromptAppend?: string): Promise<GenerateResult> {
+    throw new Error(
+      'Kiro CLI integration is not yet available. ' +
+        'The Kiro streaming protocol has not been publicly documented. ' +
+        'Please use Claude Code (claude) as the AI platform for now.',
+    );
   }
-
-  private run(
-    prompt: string,
-    config: {
-      systemPrompt?: string;
-      maxTurns: number;
-      allowedTools: string[];
-    },
-  ): Promise<RunResult> {
-    const cwd = this.options.cwd ?? process.cwd();
-
-    const args = [
-      '--print',
-      '--output-format',
-      'stream-json',
-      '--max-turns',
-      String(config.maxTurns),
-      '--permission-mode',
-      'bypassPermissions',
-      '--verbose',
-    ];
-
-    for (const tool of config.allowedTools) {
-      args.push('--allowedTools', tool);
-    }
-
-    if (config.systemPrompt) {
-      args.push('--system-prompt', config.systemPrompt);
-    }
-
-    args.push(prompt);
-
-    return new Promise((resolve, reject) => {
-      const child = spawn('kiro', args, {
-        cwd,
-        stdio: ['inherit', 'pipe', 'inherit'],
-        env: { ...process.env },
-      });
-
-      const created = new Set<string>();
-      const modified = new Set<string>();
-      let resultText = '';
-      let buffer = '';
-
-      child.stdout.on('data', (chunk: Buffer) => {
-        buffer += chunk.toString();
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
-
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          this.processStreamLine(line, created, modified, (text) => {
-            resultText = text;
-          });
-        }
-      });
-
-      child.on('close', (code) => {
-        if (buffer.trim()) {
-          this.processStreamLine(buffer, created, modified, (text) => {
-            resultText = text;
-          });
-        }
-
-        if (code !== 0 && code !== null) {
-          reject(new Error(`Kiro exited with code ${code}`));
-          return;
-        }
-
-        for (const f of created) {
-          modified.delete(f);
-        }
-
-        resolve({
-          resultText,
-          filesCreated: [...created],
-          filesModified: [...modified],
-        });
-      });
-
-      child.on('error', (err) => {
-        reject(new Error(`Failed to spawn Kiro CLI: ${err.message}`));
-      });
-    });
-  }
-
-  private processStreamLine(
-    line: string,
-    created: Set<string>,
-    modified: Set<string>,
-    onResult: (text: string) => void,
-  ): void {
-    let msg: StreamMessage;
-    try {
-      msg = JSON.parse(line) as StreamMessage;
-    } catch {
-      return;
-    }
-
-    if (msg.type === 'result') {
-      if (msg.result) {
-        onResult(msg.result);
-      }
-      const cost = (msg as unknown as Record<string, unknown>).cost_usd;
-      if (cost !== undefined) {
-        console.log(chalk.dim(`  Cost: $${Number(cost).toFixed(4)}`));
-      }
-      return;
-    }
-
-    if (msg.type === 'assistant' && msg.message?.content) {
-      for (const block of msg.message.content) {
-        if (block.type === 'text' && block.text) {
-          console.log(block.text);
-        }
-
-        if (block.type === 'tool_use' && block.input) {
-          const filePath = block.input.file_path as string | undefined;
-
-          if (block.name === 'Read' || block.name === 'Glob' || block.name === 'Grep') {
-            const target =
-              filePath ?? (block.input.pattern as string) ?? (block.input.path as string) ?? '';
-            console.log(chalk.dim(`  ${block.name}: ${target}`));
-          }
-
-          if (block.name === 'Write' || block.name === 'FileWrite') {
-            if (filePath) {
-              created.add(filePath);
-              console.log(chalk.green(`  ✓ Write: ${filePath}`));
-            }
-          }
-
-          if (
-            block.name === 'Edit' ||
-            block.name === 'FileEdit' ||
-            block.name === 'FileMultiEdit'
-          ) {
-            if (filePath) {
-              modified.add(filePath);
-              console.log(chalk.yellow(`  ✎ Edit: ${filePath}`));
-            }
-          }
-
-          if (block.name === 'Bash') {
-            const cmd = block.input.command as string | undefined;
-            if (cmd) {
-              console.log(chalk.dim(`  $ ${cmd.length > 80 ? cmd.slice(0, 77) + '...' : cmd}`));
-            }
-          }
-        }
-      }
-    }
-  }
-}
-
-function extractJson(text: string): string {
-  const fenceMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
-  if (fenceMatch) {
-    return fenceMatch[1].trim();
-  }
-
-  const jsonMatch = text.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
-  if (jsonMatch) {
-    return jsonMatch[1].trim();
-  }
-
-  return text.trim();
 }
