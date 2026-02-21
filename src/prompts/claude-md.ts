@@ -1,11 +1,6 @@
+import { INSTRUCTION_FILES } from '../core/ai-runner.js';
 import type { AIPlatform } from '../core/ai-runner.js';
 import type { DetectionResult, UserPreferences } from './types.js';
-
-const INSTRUCTION_FILES: Record<AIPlatform, string> = {
-  claude: 'CLAUDE.md',
-  kiro: 'KIRO.md',
-  codex: 'CODEX.md',
-};
 
 /**
  * Prompt for generating the agent instructions file (CLAUDE.md, KIRO.md, or CODEX.md).
@@ -44,7 +39,7 @@ export function buildClaudeMdPrompt(
 
 ${criticalPaths.map((p) => `- \`${p}\``).join('\n') || '- none detected'}
 
-## CLAUDE.md Structure Requirements
+## ${instructionFile} Structure Requirements
 
 Generate the file with exactly these sections in this order:
 
@@ -151,5 +146,5 @@ With this in place, agents can use \`mcp__puppeteer__*\` tools to: navigate to p
 
 ## Output Format
 
-Return the complete markdown content for CLAUDE.md followed by the \`.mcp.json\` content. Separate the two files with a comment line indicating the target file path, e.g. \`# file: .mcp.json\`. Target approximately 100 lines for CLAUDE.md. Be concise — every line should provide actionable information to an AI agent. Do not include meta-commentary or explanations outside the file content.`;
+Return the complete markdown content for ${instructionFile} followed by the \`.mcp.json\` content. Separate the two files with a comment line indicating the target file path, e.g. \`# file: .mcp.json\`. Target approximately 100 lines for ${instructionFile}. Be concise — every line should provide actionable information to an AI agent. Do not include meta-commentary or explanations outside the file content.`;
 }

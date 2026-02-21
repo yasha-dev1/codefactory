@@ -2,13 +2,13 @@
 
 **Automated harness engineering for AI coding agents.**
 
-CodeFactory is a CLI tool that sets up production-grade CI pipelines, code review agents, issue automation, and safety gates for any repository -- all tailored to your stack. Run `codefactory init` and it uses Claude Code (via the Agent SDK) to analyze your repo and generate everything.
+CodeFactory is a CLI tool that sets up production-grade CI pipelines, code review agents, issue automation, and safety gates for any repository -- all tailored to your stack. Run `codefactory init` and it uses an AI coding agent (Claude Code, with Kiro and Codex coming soon) to analyze your repo and generate everything.
 
 ## The Problem
 
 Setting up harness engineering for AI coding agents -- as described by [OpenAI's blog on agent-first harness engineering](https://openai.com) and [Ryan Carson's patterns](https://ryancarson.com) -- is complex and manual. A production-ready setup requires:
 
-- Agent instruction files (CLAUDE.md)
+- Platform-agnostic agent instruction files (CLAUDE.md, KIRO.md, or CODEX.md)
 - Risk-tiered CI pipelines with SHA discipline
 - Automated code review with verdict classification
 - Remediation loops for automated fix-and-retry cycles
@@ -74,28 +74,40 @@ CodeFactory will:
 2. Ask you a few configuration questions (strictness level, which harnesses to enable)
 3. Generate all selected harness files tailored to your stack
 
+## AI Providers
+
+CodeFactory supports multiple AI coding agent platforms:
+
+| Platform         | Status      | CLI Binary | Instruction File |
+| ---------------- | ----------- | ---------- | ---------------- |
+| **Claude Code**  | Supported   | `claude`   | `CLAUDE.md`      |
+| **AWS Kiro**     | Coming soon | `kiro`     | `KIRO.md`        |
+| **OpenAI Codex** | Coming soon | `codex`    | `CODEX.md`       |
+
+During `codefactory init`, you select your AI platform. All generated artifacts (CI workflows, instruction files, harness checks) are automatically tailored to the selected platform.
+
 ## What Gets Generated
 
 CodeFactory produces **16 harnesses**, each targeting a specific aspect of agent-safe development:
 
-| #   | Harness                              | What it generates                                                                                     |
-| --- | ------------------------------------ | ----------------------------------------------------------------------------------------------------- |
-| 1   | **Risk Contract**                    | `harness.config.json` -- defines risk tiers (Tier 1/2/3), critical paths, architectural boundaries    |
-| 2   | **CLAUDE.md**                        | Agent instruction file -- the control plane document read by all AI agents working on the repo        |
-| 3   | **Documentation Structure**          | `docs/` layout: `architecture.md`, `conventions.md`, `layers.md`                                      |
-| 4   | **Pre-commit Hooks**                 | `.husky/pre-commit` + `.lintstagedrc.json` -- formats staged files with Prettier before commit        |
-| 5   | **Risk Policy Gate**                 | `scripts/risk-policy-gate.sh` -- classifies changed files into Tier 1/2/3 and outputs required checks |
-| 6   | **CI Pipeline**                      | `ci.yml` -- risk-gated CI with conditional jobs based on tier                                         |
-| 7   | **Review Agent**                     | `code-review-agent.yml` + `review-agent-rerun.yml` + `auto-resolve-threads.yml`                       |
-| 8   | **Remediation Loop**                 | `remediation-agent.yml` -- auto-fix cycle with guard, validation, and protected-file safety           |
-| 9   | **Browser Evidence Capture**         | Screenshot and trace capture for UI verification during triage                                        |
-| 10  | **PR Templates**                     | `.github/PULL_REQUEST_TEMPLATE.md` with risk-tier checklists                                          |
-| 11  | **Architectural Linters**            | `structural-tests.yml` + `scripts/structural-tests.sh` -- enforces import boundaries                  |
-| 12  | **Documentation Garbage Collection** | `doc-gardening.yml` -- weekly scan for stale docs, auto-creates PR with fixes                         |
-| 13  | **Incident-to-Harness Loop**         | Converts production incidents into new harness rules                                                  |
-| 14  | **Issue Triage**                     | `issue-triage.yml` -- evaluates new issues for quality, routes actionable ones forward                |
-| 15  | **Issue Planner**                    | `issue-planner.yml` -- reads the codebase and produces a structured implementation plan               |
-| 16  | **Issue Implementer**                | `issue-implementer.yml` -- implements issues, opens PRs, handles review-fix cycles                    |
+| #   | Harness                              | What it generates                                                                                                                |
+| --- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | **Risk Contract**                    | `harness.config.json` -- defines risk tiers (Tier 1/2/3), critical paths, architectural boundaries                               |
+| 2   | **Agent Instructions**               | Agent instruction file (CLAUDE.md, KIRO.md, or CODEX.md) -- the control plane document read by all AI agents working on the repo |
+| 3   | **Documentation Structure**          | `docs/` layout: `architecture.md`, `conventions.md`, `layers.md`                                                                 |
+| 4   | **Pre-commit Hooks**                 | `.husky/pre-commit` + `.lintstagedrc.json` -- formats staged files with Prettier before commit                                   |
+| 5   | **Risk Policy Gate**                 | `scripts/risk-policy-gate.sh` -- classifies changed files into Tier 1/2/3 and outputs required checks                            |
+| 6   | **CI Pipeline**                      | `ci.yml` -- risk-gated CI with conditional jobs based on tier                                                                    |
+| 7   | **Review Agent**                     | `code-review-agent.yml` + `review-agent-rerun.yml` + `auto-resolve-threads.yml`                                                  |
+| 8   | **Remediation Loop**                 | `remediation-agent.yml` -- auto-fix cycle with guard, validation, and protected-file safety                                      |
+| 9   | **Browser Evidence Capture**         | Screenshot and trace capture for UI verification during triage                                                                   |
+| 10  | **PR Templates**                     | `.github/PULL_REQUEST_TEMPLATE.md` with risk-tier checklists                                                                     |
+| 11  | **Architectural Linters**            | `structural-tests.yml` + `scripts/structural-tests.sh` -- enforces import boundaries                                             |
+| 12  | **Documentation Garbage Collection** | `doc-gardening.yml` -- weekly scan for stale docs, auto-creates PR with fixes                                                    |
+| 13  | **Incident-to-Harness Loop**         | Converts production incidents into new harness rules                                                                             |
+| 14  | **Issue Triage**                     | `issue-triage.yml` -- evaluates new issues for quality, routes actionable ones forward                                           |
+| 15  | **Issue Planner**                    | `issue-planner.yml` -- reads the codebase and produces a structured implementation plan                                          |
+| 16  | **Issue Implementer**                | `issue-implementer.yml` -- implements issues, opens PRs, handles review-fix cycles                                               |
 
 ## GitHub Workflows Reference
 
@@ -471,12 +483,12 @@ CLI (Commander)
   └── init ──► Harness setup wizard
                  ├── Detector (heuristic + Claude-powered analysis)
                  └── Harness Modules (16 modules, each implementing HarnessModule)
-                      └── Claude Runner (Agent SDK) ──► Generated Files
+                      └── AI Runner (Agent SDK) ──► Generated Files
 ```
 
 **Core modules:**
 
-- `src/core/claude-runner.ts` -- Wraps the Claude Code Agent SDK. Provides `analyze()` for structured JSON extraction (read-only tools, Zod schema validation) and `generate()` for file creation (read + write tools).
+- `src/core/ai-runner.ts` -- Defines the `AIRunner` interface and shared types. `src/core/claude-runner.ts` wraps the Claude Code Agent SDK. Provides `analyze()` for structured JSON extraction (read-only tools, Zod schema validation) and `generate()` for file creation (read + write tools). Kiro and Codex runners are stubbed for future integration.
 - `src/core/detector.ts` -- Two-phase stack detection: fast heuristics (file existence checks, package.json parsing) followed by Claude-powered deep analysis.
 - `src/core/config.ts` -- Loads and saves `harness.config.json`.
 - `src/core/file-writer.ts` -- Tracks created and modified files during harness generation.
@@ -504,7 +516,7 @@ npm run typecheck
 ## Requirements
 
 - **Node.js** >= 20
-- **Claude Code CLI** installed and authenticated (`npm install -g @anthropic-ai/claude-code`)
+- **Claude Code CLI** installed and authenticated (`npm install -g @anthropic-ai/claude-code`), or an alternative AI provider CLI (`kiro`, `codex`) once supported
 
 ## License
 

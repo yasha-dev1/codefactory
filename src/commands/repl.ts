@@ -1,7 +1,6 @@
-import { exec, spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdir, writeFile, chmod } from 'node:fs/promises';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
 
 import chalk from 'chalk';
 import { z } from 'zod';
@@ -19,8 +18,6 @@ import { generateBranchName, createWorktree } from '../core/worktree.js';
 import { openInNewTerminal } from '../core/terminal.js';
 import type { PromptEntry } from '../core/prompt-store.js';
 import { PromptStore } from '../core/prompt-store.js';
-
-const execAsync = promisify(exec);
 
 type ReplAction =
   | { type: 'prompt'; name: string }
@@ -250,7 +247,9 @@ export async function replCommand(): Promise<void> {
   }
 
   try {
-    await execAsync('which claude');
+    execFileSync(process.platform === 'win32' ? 'where' : 'which', ['claude'], {
+      stdio: 'ignore',
+    });
   } catch {
     throw new PlatformCLINotFoundError('claude', 'claude');
   }

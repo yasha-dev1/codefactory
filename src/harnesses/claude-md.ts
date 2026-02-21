@@ -1,14 +1,8 @@
 import type { HarnessModule, HarnessContext, HarnessOutput } from './types.js';
 import type { DetectionResult } from '../core/detector.js';
-import type { AIPlatform } from '../core/ai-runner.js';
+import { INSTRUCTION_FILES } from '../core/ai-runner.js';
 import { buildClaudeMdPrompt } from '../prompts/claude-md.js';
 import { buildSystemPrompt } from '../prompts/system.js';
-
-const AGENT_INSTRUCTION_FILES: Record<AIPlatform, string> = {
-  claude: 'CLAUDE.md',
-  kiro: 'KIRO.md',
-  codex: 'CODEX.md',
-};
 
 function buildProjectOverview(detection: DetectionResult): string {
   const parts: string[] = [];
@@ -129,7 +123,7 @@ export const claudeMdHarness: HarnessModule = {
   async execute(ctx: HarnessContext): Promise<HarnessOutput> {
     const { detection, userPreferences } = ctx;
     const aiPlatform = ctx.runner.platform;
-    const instructionFile = AGENT_INSTRUCTION_FILES[aiPlatform];
+    const instructionFile = INSTRUCTION_FILES[aiPlatform];
 
     // 1. Generate reference content from existing builders
     const refContent = `# ${instructionFile}

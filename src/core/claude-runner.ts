@@ -2,15 +2,9 @@ import { spawn } from 'child_process';
 import type { z } from 'zod';
 import chalk from 'chalk';
 
-import type { AIRunner, AIPlatform, GenerateResult } from './ai-runner.js';
+import type { AIRunner, AIRunnerOptions, AIPlatform, GenerateResult } from './ai-runner.js';
 
 export type { GenerateResult };
-
-export interface ClaudeRunnerOptions {
-  maxTurns?: number;
-  systemPrompt?: string;
-  cwd?: string;
-}
 
 interface StreamMessage {
   type: string;
@@ -40,9 +34,9 @@ interface RunResult {
 
 export class ClaudeRunner implements AIRunner {
   readonly platform: AIPlatform = 'claude';
-  private readonly options: ClaudeRunnerOptions;
+  private readonly options: AIRunnerOptions;
 
-  constructor(options: ClaudeRunnerOptions = {}) {
+  constructor(options: AIRunnerOptions = {}) {
     this.options = options;
   }
 

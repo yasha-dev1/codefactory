@@ -1,16 +1,10 @@
 import { execFileSync } from 'node:child_process';
 
-import type { AIPlatform, AIRunner } from './ai-runner.js';
+import type { AIPlatform, AIRunner, AIRunnerOptions } from './ai-runner.js';
 import { ClaudeRunner } from './claude-runner.js';
 import { KiroRunner } from './kiro-runner.js';
 import { CodexRunner } from './codex-runner.js';
 import { PlatformCLINotFoundError } from '../utils/errors.js';
-
-export interface AIRunnerOptions {
-  maxTurns?: number;
-  systemPrompt?: string;
-  cwd?: string;
-}
 
 const PLATFORM_BINARIES: Record<AIPlatform, string> = {
   claude: 'claude',

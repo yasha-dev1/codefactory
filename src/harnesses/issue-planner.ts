@@ -47,7 +47,7 @@ ${refGuard}
 ${refPromptMd}
 \`\`\``;
 
-    // 3. Call Claude runner
+    // 3. Call AI runner
     const systemPrompt = buildSystemPrompt(ctx.runner.platform);
     try {
       const result = await ctx.runner.generate(prompt, systemPrompt);

@@ -2,6 +2,12 @@ import type { z } from 'zod';
 
 export type AIPlatform = 'claude' | 'kiro' | 'codex';
 
+export interface AIRunnerOptions {
+  maxTurns?: number;
+  systemPrompt?: string;
+  cwd?: string;
+}
+
 export interface GenerateResult {
   filesCreated: string[];
   filesModified: string[];
@@ -12,6 +18,12 @@ export interface AIRunner {
   analyze<T>(prompt: string, schema: z.ZodType<T>): Promise<T>;
   generate(prompt: string, systemPromptAppend?: string): Promise<GenerateResult>;
 }
+
+export const INSTRUCTION_FILES: Record<AIPlatform, string> = {
+  claude: 'CLAUDE.md',
+  kiro: 'KIRO.md',
+  codex: 'CODEX.md',
+};
 
 export const AI_PLATFORMS: { name: string; value: AIPlatform; description: string }[] = [
   {

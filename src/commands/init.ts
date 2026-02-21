@@ -1,6 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
-import { exec, execSync } from 'node:child_process';
+import { execFile, execSync } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { logger } from '../ui/logger.js';
@@ -9,7 +9,7 @@ import { confirmPrompt, selectPrompt, multiselectPrompt, inputPrompt } from '../
 import { isGitRepo, getRepoRoot } from '../utils/git.js';
 import { readFileIfExists } from '../utils/fs.js';
 import { NotAGitRepoError } from '../utils/errors.js';
-import { AI_PLATFORMS } from '../core/ai-runner.js';
+import { AI_PLATFORMS, INSTRUCTION_FILES } from '../core/ai-runner.js';
 import type { AIPlatform } from '../core/ai-runner.js';
 import { createRunner, validatePlatformCLI } from '../core/runner-factory.js';
 import { FileWriter } from '../core/file-writer.js';
@@ -24,7 +24,7 @@ import type {
   UserPreferences,
 } from '../harnesses/types.js';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export interface InitOptions {
   skipDetection?: boolean;
@@ -388,10 +388,12 @@ export async function initCommand(options: InitOptions): Promise<void> {
       const relativePaths = allFiles.map((f) => relative(repoRoot, f));
       const uniquePaths = [...new Set(relativePaths)];
 
-      await execAsync(`git add ${uniquePaths.map((p) => `"${p}"`).join(' ')}`, { cwd: repoRoot });
-      await execAsync(`git commit -m "chore: initialize harness engineering with CodeFactory"`, {
-        cwd: repoRoot,
-      });
+      await execFileAsync('git', ['add', ...uniquePaths], { cwd: repoRoot });
+      await execFileAsync(
+        'git',
+        ['commit', '-m', 'chore: initialize harness engineering with CodeFactory'],
+        { cwd: repoRoot },
+      );
       logger.success('Created commit: chore: initialize harness engineering with CodeFactory');
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -401,12 +403,7 @@ export async function initCommand(options: InitOptions): Promise<void> {
   }
 
   // Next steps
-  const instructionFileNames: Record<AIPlatform, string> = {
-    claude: 'CLAUDE.md',
-    kiro: 'KIRO.md',
-    codex: 'CODEX.md',
-  };
-  const instructionFile = instructionFileNames[aiPlatform];
+  const instructionFile = INSTRUCTION_FILES[aiPlatform];
 
   console.log();
   logger.header('Next steps');
