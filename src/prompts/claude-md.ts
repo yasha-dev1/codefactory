@@ -13,7 +13,7 @@ const INSTRUCTION_FILES: Record<AIPlatform, string> = {
 export function buildClaudeMdPrompt(
   detection: DetectionResult,
   prefs: UserPreferences,
-  aiPlatform: AIPlatform = 'claude',
+  aiPlatform: AIPlatform,
 ): string {
   const criticalPaths = [...detection.criticalPaths, ...(prefs.customCriticalPaths ?? [])];
   const instructionFile = INSTRUCTION_FILES[aiPlatform];

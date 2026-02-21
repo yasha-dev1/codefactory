@@ -14,7 +14,7 @@ import { borderedInput } from '../ui/bordered-input.js';
 import type { SlashCommand } from '../ui/bordered-input.js';
 import { isGitRepo, getRepoRoot, hasUncommittedChanges } from '../utils/git.js';
 import { readFileIfExists } from '../utils/fs.js';
-import { NotAGitRepoError, ClaudeNotFoundError } from '../utils/errors.js';
+import { NotAGitRepoError, PlatformCLINotFoundError } from '../utils/errors.js';
 import { generateBranchName, createWorktree } from '../core/worktree.js';
 import { openInNewTerminal } from '../core/terminal.js';
 import type { PromptEntry } from '../core/prompt-store.js';
@@ -252,7 +252,7 @@ export async function replCommand(): Promise<void> {
   try {
     await execAsync('which claude');
   } catch {
-    throw new ClaudeNotFoundError();
+    throw new PlatformCLINotFoundError('claude', 'claude');
   }
 
   const repoRoot = await getRepoRoot();

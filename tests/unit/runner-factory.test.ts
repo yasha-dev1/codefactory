@@ -49,7 +49,8 @@ describe('validatePlatformCLI', () => {
   it('should not throw when CLI binary is found', () => {
     mockedExecFileSync.mockReturnValue(Buffer.from('/usr/local/bin/claude'));
     expect(() => validatePlatformCLI('claude')).not.toThrow();
-    expect(mockedExecFileSync).toHaveBeenCalledWith('which', ['claude'], { stdio: 'ignore' });
+    const expectedCmd = process.platform === 'win32' ? 'where' : 'which';
+    expect(mockedExecFileSync).toHaveBeenCalledWith(expectedCmd, ['claude'], { stdio: 'ignore' });
   });
 
   it('should throw PlatformCLINotFoundError when CLI binary is not found', () => {

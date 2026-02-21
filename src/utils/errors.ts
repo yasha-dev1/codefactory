@@ -5,15 +5,6 @@ export class UserCancelledError extends Error {
   }
 }
 
-export class ClaudeNotFoundError extends Error {
-  constructor(
-    message = 'Claude CLI not found. Please install Claude Code: npm install -g @anthropic-ai/claude-code',
-  ) {
-    super(message);
-    this.name = 'ClaudeNotFoundError';
-  }
-}
-
 export class NotAGitRepoError extends Error {
   constructor(message = 'Not a git repository. Please run this command from within a git repo.') {
     super(message);

@@ -104,7 +104,7 @@ import { writeFile } from 'node:fs/promises';
 import { isGitRepo, getRepoRoot, hasUncommittedChanges } from '../../src/utils/git.js';
 import { inputPrompt, selectPrompt, confirmPrompt } from '../../src/ui/prompts.js';
 import { replCommand } from '../../src/commands/repl.js';
-import { NotAGitRepoError, ClaudeNotFoundError } from '../../src/utils/errors.js';
+import { NotAGitRepoError, PlatformCLINotFoundError } from '../../src/utils/errors.js';
 import { createWorktree } from '../../src/core/worktree.js';
 import { openInNewTerminal } from '../../src/core/terminal.js';
 
@@ -143,7 +143,7 @@ describe('replCommand', () => {
     expect(mockedIsGitRepo).toHaveBeenCalledOnce();
   });
 
-  it('should throw ClaudeNotFoundError when claude is not installed', async () => {
+  it('should throw PlatformCLINotFoundError when claude is not installed', async () => {
     mockedIsGitRepo.mockResolvedValue(true);
 
     // Make exec reject (simulates `which claude` failing)
@@ -154,7 +154,7 @@ describe('replCommand', () => {
       },
     );
 
-    await expect(replCommand()).rejects.toThrow(ClaudeNotFoundError);
+    await expect(replCommand()).rejects.toThrow(PlatformCLINotFoundError);
   });
 
   /**

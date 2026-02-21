@@ -10,8 +10,8 @@ const PLATFORM_NOTES: Record<AIPlatform, string> = {
 /**
  * Shared system prompt establishing the AI agent's role as a harness engineering expert.
  */
-export function buildSystemPrompt(platform?: AIPlatform): string {
-  const platformNote = platform ? PLATFORM_NOTES[platform] : '';
+export function buildSystemPrompt(platform: AIPlatform): string {
+  const platformNote = PLATFORM_NOTES[platform];
 
   return `You are an expert harness engineer specializing in automated code quality, CI/CD pipelines, and developer experience infrastructure. Your role is to analyze repositories and generate production-grade harness engineering artifacts.
 

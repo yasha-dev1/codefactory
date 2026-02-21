@@ -35,8 +35,9 @@ export function createRunner(platform: AIPlatform, options?: AIRunnerOptions): A
 
 export function validatePlatformCLI(platform: AIPlatform): void {
   const binary = PLATFORM_BINARIES[platform];
+  const cmd = process.platform === 'win32' ? 'where' : 'which';
   try {
-    execFileSync('which', [binary], { stdio: 'ignore' });
+    execFileSync(cmd, [binary], { stdio: 'ignore' });
   } catch {
     throw new PlatformCLINotFoundError(platform, binary);
   }
