@@ -19,10 +19,51 @@ Setting up harness engineering for AI coding agents -- as described by [OpenAI's
 
 Doing this by hand for every repo is slow, error-prone, and inconsistent.
 
-## Quick Start
+## Installation
+
+### Quick install (recommended)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yasha-dev1/codefactory/main/scripts/install.sh | bash
+```
+
+### npm
 
 ```bash
 npm install -g codefactory
+```
+
+### Manual
+
+Download the latest release from [GitHub Releases](https://github.com/yasha-dev1/codefactory/releases),
+make it executable, and place it on your PATH:
+
+```bash
+chmod +x codefactory
+sudo mv codefactory /usr/local/bin/
+```
+
+## Updating
+
+```bash
+codefactory update
+```
+
+Check for updates without installing:
+
+```bash
+codefactory update --check
+```
+
+Force re-download of the current version:
+
+```bash
+codefactory update --force
+```
+
+## Quick Start
+
+```bash
 cd your-project
 codefactory init
 ```

@@ -22,3 +22,13 @@ program
     const { initCommand } = await import('./commands/init.js');
     await initCommand(options);
   });
+
+program
+  .command('update')
+  .description('Check for and install updates')
+  .option('--check', 'Check for updates without installing')
+  .option('--force', 'Re-download even if already on latest version')
+  .action(async (options: { check?: boolean; force?: boolean }) => {
+    const { updateCommand } = await import('./commands/update.js');
+    await updateCommand(options);
+  });

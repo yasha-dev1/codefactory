@@ -6,7 +6,9 @@ export class UserCancelledError extends Error {
 }
 
 export class ClaudeNotFoundError extends Error {
-  constructor(message = 'Claude CLI not found. Please install Claude Code: npm install -g @anthropic-ai/claude-code') {
+  constructor(
+    message = 'Claude CLI not found. Please install Claude Code: npm install -g @anthropic-ai/claude-code',
+  ) {
     super(message);
     this.name = 'ClaudeNotFoundError';
   }
@@ -23,5 +25,26 @@ export class WorktreeError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'WorktreeError';
+  }
+}
+
+export class UpdateError extends Error {
+  constructor(message = 'Update failed') {
+    super(message);
+    this.name = 'UpdateError';
+  }
+}
+
+export class NetworkError extends UpdateError {
+  constructor(message = 'Network request failed') {
+    super(message);
+    this.name = 'NetworkError';
+  }
+}
+
+export class ChecksumError extends UpdateError {
+  constructor(message = 'Checksum verification failed') {
+    super(message);
+    this.name = 'ChecksumError';
   }
 }
