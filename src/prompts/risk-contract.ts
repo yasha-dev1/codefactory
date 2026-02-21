@@ -107,7 +107,23 @@ Based on the detected layers (${detection.architecturalLayers.join(', ') || 'non
 - \`packages\`: If monorepo, list detected package directories; otherwise empty array
 - \`sharedChecks\`: Checks that apply to all packages
 
+## Mandatory Top-Level Keys
+
+The generated JSON MUST contain ALL of the following top-level keys. The harness-smoke CI job
+validates their presence — missing any one will cause every PR's CI to fail:
+
+1. \`version\` — string
+2. \`riskTiers\` — object with \`tier1\`, \`tier2\`, \`tier3\` sub-objects
+3. \`commands\` — object with \`test\`, \`build\`, \`lint\`, \`typeCheck\` entries
+4. \`shaDiscipline\` — object with \`enabled\` boolean
+5. \`architecturalBoundaries\` — object mapping layer names to allowed imports
+6. \`docsDrift\` — object with tracking rules
+7. \`evidenceConfig\` — object with screenshot/evidence settings
+8. \`monorepo\` — object with monorepo settings
+
+Do NOT omit any of these sections. They are all required for the CI pipeline to function.
+
 ## Output Format
 
-Return ONLY the complete JSON content for \`harness.config.json\`. The JSON must be valid and parseable. Do not wrap in markdown code fences. Do not include explanatory text.`;
+Write the complete JSON content to \`harness.config.json\` using the Write tool. The JSON must be valid and parseable. Do not include explanatory text outside the file.`;
 }

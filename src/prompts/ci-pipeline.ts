@@ -128,7 +128,7 @@ Validates the harness engineering setup itself:
 
 ## CI Best Practices to Follow
 
-- Pin action versions to full SHA hashes (for GitHub Actions) for security
+- **SHA-Pinned Actions (MANDATORY)**: ALL GitHub Actions MUST be pinned to exact commit SHAs, not version tags. Example: \`actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683\` (v4.2.2), \`actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af\` (v4.1.0). Never use \`@v4\` — tags can be moved.
 - Use \`concurrency\` groups to cancel outdated runs on the same PR
 - Set appropriate \`timeout-minutes\` for each job (10 min for lint, 20 for tests, 30 for builds)
 - Use minimal permissions: \`contents: read\` by default, \`pull-requests: write\` only where needed
@@ -136,6 +136,9 @@ Validates the harness engineering setup itself:
 - ${cacheStrategy}
 - Upload test results and coverage as artifacts
 - For monorepo (${detection.monorepo}): use path filters to only run relevant jobs
+- **Node Version**: Use Node.js 22 consistently across all jobs
+- **TypeScript Execution**: Use \`npx tsx\` to run TypeScript scripts, NOT \`npx ts-node\` (this project uses ESM)
+- **Structural Tests**: The structural-tests job must run \`bash scripts/structural-tests.sh\`, NOT \`npm test\` — it validates architectural boundaries, not unit tests
 
 ## Claude Code Integration (IMPORTANT)
 

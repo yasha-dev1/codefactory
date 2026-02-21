@@ -100,7 +100,7 @@ The workflow should have a path filter to only run when UI-related files change.
 
 ## Quality Requirements
 
-- Scripts should be executable with ts-node or tsx
+- Scripts should be executable with \`npx tsx\` (NOT ts-node — this project uses ESM)
 - Include proper error handling for browser launch failures
 - Support CI (headless) and local (headed for debugging) modes via \`--headed\` flag
 - Evidence directory should be gitignored by default

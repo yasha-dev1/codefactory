@@ -45,5 +45,17 @@ The harness system operates on a three-tier risk model:
 
 ## SHA Discipline
 
-Every CI workflow and review process must pin to a specific commit SHA. This prevents TOCTOU (time-of-check-time-of-use) races where code changes between when it was reviewed and when it was merged. The risk-policy-gate, review-agent, and remediation-loop all enforce SHA consistency.`;
+Every CI workflow and review process must pin to a specific commit SHA. This prevents TOCTOU (time-of-check-time-of-use) races where code changes between when it was reviewed and when it was merged. The risk-policy-gate, review-agent, and remediation-loop all enforce SHA consistency.
+
+Additionally, all GitHub Actions used in workflows MUST be pinned to exact commit SHAs (not version tags like @v4). Version tags can be moved to point at different code, which is a supply-chain security risk. Always use the full 40-character SHA hash.
+
+## TypeScript Execution in ESM Projects
+
+When a project uses ESM ("type": "module" in package.json), always use \`npx tsx\` to run TypeScript scripts. Never use \`npx ts-node\` — it does not properly support ESM modules and will fail with import errors.
+
+## Consistency Requirements
+
+- Use the same Node.js version across all generated workflows (default: 22)
+- Use the same action SHAs across all workflows — do not mix pinned SHAs and version tags
+- Structural test jobs must always run \`bash scripts/structural-tests.sh\`, never \`npm test\` (they serve different purposes)`;
 }

@@ -117,9 +117,13 @@ export const riskContractHarness: HarnessModule = {
 
 ## Reference Implementation
 
-Use this as your structural template. Keep the same patterns but customize all
-language setup, install commands, test/lint/build commands, and tooling for the
-detected stack.
+CRITICAL: The reference below contains the EXACT required structure. Your output
+MUST include ALL of these top-level keys: version, riskTiers, commands,
+shaDiscipline, architecturalBoundaries. The harness-smoke CI job validates that
+these keys exist — missing any will cause CI to fail on every PR.
+
+Customize the values (patterns, commands, thresholds) for the detected stack,
+but do NOT omit any top-level section.
 
 ### Reference: harness.config.json
 \`\`\`json

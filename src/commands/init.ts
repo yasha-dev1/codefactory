@@ -32,21 +32,19 @@ export interface InitOptions {
 // Mapping from harness name to npm script entries
 const HARNESS_SCRIPTS: Record<string, Record<string, string>> = {
   'risk-policy-gate': {
-    'harness:risk-tier': 'npx ts-node scripts/risk-policy-gate.ts',
+    'harness:risk-tier': 'npx tsx scripts/risk-policy-gate.ts',
   },
   'risk-contract': {
-    'harness:smoke': 'npx ts-node scripts/harness-smoke.ts',
+    'harness:smoke': 'npx tsx scripts/harness-smoke.ts',
   },
   'browser-evidence': {
-    'harness:ui:capture-browser-evidence':
-      'npx ts-node scripts/harness-ui-capture-browser-evidence.ts',
-    'harness:ui:verify-browser-evidence':
-      'npx ts-node scripts/harness-ui-verify-browser-evidence.ts',
+    'harness:ui:capture-browser-evidence': 'npx tsx scripts/harness-ui-capture-browser-evidence.ts',
+    'harness:ui:verify-browser-evidence': 'npx tsx scripts/harness-ui-verify-browser-evidence.ts',
     'harness:ui:pre-pr':
       'npm run harness:ui:capture-browser-evidence && npm run harness:ui:verify-browser-evidence',
   },
   'garbage-collection': {
-    'harness:weekly-metrics': 'npx ts-node scripts/harness-weekly-metrics.ts',
+    'harness:weekly-metrics': 'npx tsx scripts/harness-weekly-metrics.ts',
   },
 };
 
