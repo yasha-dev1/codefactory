@@ -162,7 +162,14 @@ steps:
 
 Never reference \`ANTHROPIC_API_KEY\` or invoke the \`claude\` CLI directly with API key authentication. Always use the action with \`claude_code_oauth_token\`.
 
-## Output Format
+## Required Output Files (ALL mandatory)
 
-Return the complete file contents for each workflow file. Separate each file with a comment line indicating the target file path. The files must be valid YAML that the CI provider can parse without errors. Do not wrap in markdown code fences.`;
+You MUST generate ALL of the following files. Do not skip any:
+
+1. \`.github/workflows/ci.yml\` — Main CI pipeline workflow
+2. \`.github/workflows/structural-tests.yml\` — Structural tests workflow
+3. \`.github/workflows/harness-smoke.yml\` — Harness smoke tests workflow
+4. \`scripts/structural-tests.sh\` — Shell script for architectural boundary validation (make executable)
+
+Write each file using the Write tool. The files must be valid YAML/shell that can be parsed without errors.`;
 }

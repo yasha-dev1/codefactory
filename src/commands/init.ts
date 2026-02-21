@@ -1,3 +1,4 @@
+import { readFile, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { exec, execSync } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -10,8 +11,7 @@ import { readFileIfExists } from '../utils/fs.js';
 import { NotAGitRepoError } from '../utils/errors.js';
 import { ClaudeRunner } from '../core/claude-runner.js';
 import { FileWriter } from '../core/file-writer.js';
-import { loadHarnessConfig, saveHarnessConfig } from '../core/config.js';
-import type { HarnessConfig } from '../core/config.js';
+import { loadHarnessConfig } from '../core/config.js';
 import { runHeuristicDetection } from '../core/detector.js';
 import type { DetectionResult } from '../core/detector.js';
 import { getHarnessModules } from '../harnesses/index.js';
@@ -259,8 +259,20 @@ export async function initCommand(options: InitOptions): Promise<void> {
   // ── 6. Add npm scripts to target repo's package.json ─────────────────
   await addHarnessScripts(repoRoot, selectedHarnesses, fileWriter);
 
-  // ── 7. Save harness config ───────────────────────────────────────────
-  const config: HarnessConfig = {
+  // ── 7. Save harness config (merge with Claude-generated config) ─────
+  // The risk-contract harness writes harness.config.json with riskTiers,
+  // commands, shaDiscipline, architecturalBoundaries, etc. We merge the
+  // harness registry into that config rather than overwriting it.
+  const configPath = join(repoRoot, 'harness.config.json');
+  let claudeConfig: Record<string, unknown> = {};
+  try {
+    const raw = await readFile(configPath, 'utf-8');
+    claudeConfig = JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    // No existing config from risk-contract harness, start fresh
+  }
+
+  const harnessRegistry = {
     version: '1.0.0',
     repoRoot,
     detection: {
@@ -279,11 +291,14 @@ export async function initCommand(options: InitOptions): Promise<void> {
         files: output ? [...output.filesCreated, ...output.filesModified] : [],
       };
     }),
-    generatedAt: new Date().toISOString(),
+    generatedAt: claudeConfig.generatedAt ?? new Date().toISOString(),
     lastUpdated: new Date().toISOString(),
   };
 
-  await saveHarnessConfig(repoRoot, config);
+  // Merge: Claude's config (riskTiers, commands, etc.) is the base,
+  // harness registry fields are added/overwritten on top
+  const mergedConfig = { ...claudeConfig, ...harnessRegistry };
+  await writeFile(configPath, JSON.stringify(mergedConfig, null, 2) + '\n', 'utf-8');
   logger.fileCreated('harness.config.json');
 
   // ── 8. Summary ───────────────────────────────────────────────────────
