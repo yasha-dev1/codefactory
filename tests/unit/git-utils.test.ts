@@ -128,5 +128,23 @@ describe('git utility functions', () => {
       expect(created).toEqual([]);
       expect(modified).toEqual([]);
     });
+
+    it('should handle repo with no commits (no HEAD)', async () => {
+      // Create a fresh repo without any commits
+      const freshRepo = await mkdtemp(join(tmpdir(), 'codefactory-no-head-'));
+      await execAsync('git init', { cwd: freshRepo });
+      await execAsync('git config user.email "test@test.com"', { cwd: freshRepo });
+      await execAsync('git config user.name "Test"', { cwd: freshRepo });
+
+      try {
+        const before = snapshotUntrackedFiles(freshRepo);
+        await execAsync('touch newfile.txt', { cwd: freshRepo });
+        const { created, modified } = diffWorkingTree(before, freshRepo);
+        expect(created).toContain('newfile.txt');
+        expect(modified).toEqual([]);
+      } finally {
+        await rm(freshRepo, { recursive: true, force: true });
+      }
+    });
   });
 });

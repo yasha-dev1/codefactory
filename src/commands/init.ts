@@ -79,7 +79,7 @@ export async function initCommand(options: InitOptions): Promise<void> {
   }
 
   // ── 2. Detection phase ───────────────────────────────────────────────
-  const detection = await withSpinner('Analyzing repository...', () =>
+  let detection = await withSpinner('Analyzing repository...', () =>
     runHeuristicDetection(repoRoot),
   );
 
@@ -88,7 +88,7 @@ export async function initCommand(options: InitOptions): Promise<void> {
 
   const detectionOk = await confirmPrompt('Does this detection look correct?', true);
   if (!detectionOk) {
-    await correctDetection(detection);
+    detection = await correctDetection(detection);
   }
 
   const ciProvider = await selectPrompt<UserPreferences['ciProvider']>(

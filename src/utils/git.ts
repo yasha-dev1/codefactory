@@ -60,12 +60,18 @@ export function diffWorkingTree(
   beforeUntracked: Set<string>,
   cwd: string,
 ): { created: string[]; modified: string[] } {
-  // Use HEAD to catch both staged and unstaged modifications
-  const diffOutput = execFileSync('git', ['diff', 'HEAD', '--name-only'], {
-    cwd,
-    encoding: 'utf-8',
-  });
-  const modified = diffOutput.split('\n').filter(Boolean);
+  // Use HEAD to catch both staged and unstaged modifications.
+  // On a fresh repo with no commits, HEAD doesn't exist — treat as no modifications.
+  let modified: string[] = [];
+  try {
+    const diffOutput = execFileSync('git', ['diff', 'HEAD', '--name-only'], {
+      cwd,
+      encoding: 'utf-8',
+    });
+    modified = diffOutput.split('\n').filter(Boolean);
+  } catch {
+    // HEAD doesn't exist (no commits yet) — all files are new, none modified
+  }
 
   const afterUntracked = snapshotUntrackedFiles(cwd);
   const created = [...afterUntracked].filter((f) => !beforeUntracked.has(f));
