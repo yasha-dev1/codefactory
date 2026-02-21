@@ -49,9 +49,11 @@ info "Fetching latest release from ${API_URL} ..."
 
 RELEASE_JSON=$(curl -fsSL "$API_URL")
 
-# Extract the tarball/binary download URL for 'codefactory' asset (no jq dependency)
+# Extract the binary download URL for the 'codefactory' asset (no jq dependency).
+# Anchor to /codefactory" so we only match URLs whose filename is exactly "codefactory",
+# avoiding false matches on other assets whose URL path contains the repo name.
 BINARY_URL=$(printf '%s' "$RELEASE_JSON" \
-  | grep -o '"browser_download_url":\s*"[^"]*codefactory[^"]*"' \
+  | grep -o '"browser_download_url":\s*"[^"]*/codefactory"' \
   | head -1 \
   | sed 's/"browser_download_url":\s*"//;s/"$//')
 

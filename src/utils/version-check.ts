@@ -1,13 +1,28 @@
+import { z } from 'zod';
+
 import { NetworkError, UpdateError } from './errors.js';
 
 const GITHUB_API_URL = 'https://api.github.com/repos/yasha-dev1/codefactory/releases/latest';
+
+const GitHubAssetSchema = z.object({
+  name: z.string(),
+  browser_download_url: z.string().url(),
+});
+
+const GitHubReleaseSchema = z.object({
+  tag_name: z.string(),
+  published_at: z.string(),
+  html_url: z.string().url(),
+  body: z.string().nullable().default(''),
+  assets: z.array(GitHubAssetSchema),
+});
 
 export interface ReleaseInfo {
   version: string;
   tag: string;
   publishedAt: string;
   downloadUrl: string;
-  checksumUrl: string;
+  checksumUrl: string | undefined;
   releaseUrl: string;
   changelog: string;
 }
@@ -32,26 +47,31 @@ export async function fetchLatestRelease(): Promise<ReleaseInfo> {
     throw new NetworkError(`GitHub API returned ${response.status}: ${response.statusText}`);
   }
 
-  const data = (await response.json()) as Record<string, unknown>;
-  const tag = data.tag_name as string;
-  const version = tag.startsWith('v') ? tag.slice(1) : tag;
-  const assets = data.assets as Array<Record<string, unknown>>;
+  const raw = await response.json();
+  const parsed = GitHubReleaseSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new UpdateError(`Unexpected GitHub API response: ${parsed.error.message}`);
+  }
 
-  const binaryAsset = assets?.find((a) => a.name === 'codefactory');
+  const data = parsed.data;
+  const tag = data.tag_name;
+  const version = tag.startsWith('v') ? tag.slice(1) : tag;
+
+  const binaryAsset = data.assets.find((a) => a.name === 'codefactory');
   if (!binaryAsset) {
     throw new UpdateError('No "codefactory" asset found in the latest release.');
   }
 
-  const checksumAsset = assets?.find((a) => a.name === 'checksums.sha256');
+  const checksumAsset = data.assets.find((a) => a.name === 'checksums.sha256');
 
   return {
     version,
     tag,
-    publishedAt: data.published_at as string,
-    downloadUrl: binaryAsset.browser_download_url as string,
-    checksumUrl: checksumAsset ? (checksumAsset.browser_download_url as string) : '',
-    releaseUrl: data.html_url as string,
-    changelog: (data.body as string) || '',
+    publishedAt: data.published_at,
+    downloadUrl: binaryAsset.browser_download_url,
+    checksumUrl: checksumAsset?.browser_download_url,
+    releaseUrl: data.html_url,
+    changelog: data.body || '',
   };
 }
 

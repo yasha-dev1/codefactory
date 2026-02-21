@@ -4,7 +4,7 @@ import { chmod, readFile, rename } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
-import type { Readable } from 'node:stream';
+import { Readable } from 'node:stream';
 
 import chalk from 'chalk';
 
@@ -73,9 +73,10 @@ export async function updateCommand(options: { check?: boolean; force?: boolean 
       });
 
       // Verify checksum
-      if (latest.checksumUrl) {
+      const { checksumUrl } = latest;
+      if (checksumUrl) {
         await withSpinner('Verifying checksum', async () => {
-          await verifyChecksum(tempBinary, latest.checksumUrl);
+          await verifyChecksum(tempBinary, checksumUrl);
         });
       }
 
@@ -137,8 +138,7 @@ async function downloadFile(url: string, dest: string): Promise<void> {
   }
 
   const fileStream = createWriteStream(dest);
-  // Node's fetch returns a web ReadableStream; convert to Node stream for piping
-  const readable = response.body as unknown as Readable;
+  const readable = Readable.fromWeb(response.body as import('node:stream/web').ReadableStream);
   await pipeline(readable, fileStream);
 }
 
