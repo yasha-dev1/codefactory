@@ -14,7 +14,7 @@ export const issueImplementerHarness: HarnessModule = {
 
   async execute(ctx: HarnessContext): Promise<HarnessOutput> {
     const prompt = buildIssueImplementerPrompt(ctx.detection, ctx.userPreferences);
-    const systemPrompt = buildSystemPrompt();
+    const systemPrompt = buildSystemPrompt(ctx.runner.platform);
 
     try {
       const result = await ctx.runner.generate(prompt, systemPrompt);

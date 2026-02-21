@@ -1,6 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
-import { exec, execSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { logger } from '../ui/logger.js';
@@ -9,7 +9,9 @@ import { confirmPrompt, selectPrompt, multiselectPrompt, inputPrompt } from '../
 import { isGitRepo, getRepoRoot } from '../utils/git.js';
 import { readFileIfExists } from '../utils/fs.js';
 import { NotAGitRepoError } from '../utils/errors.js';
-import { ClaudeRunner } from '../core/claude-runner.js';
+import { AI_PLATFORMS, INSTRUCTION_FILES } from '../core/ai-runner.js';
+import type { AIPlatform } from '../core/ai-runner.js';
+import { createRunner, validatePlatformCLI } from '../core/runner-factory.js';
 import { FileWriter } from '../core/file-writer.js';
 import { loadHarnessConfig } from '../core/config.js';
 import { runHeuristicDetection } from '../core/detector.js';
@@ -22,7 +24,7 @@ import type {
   UserPreferences,
 } from '../harnesses/types.js';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export interface InitOptions {
   skipDetection?: boolean;
@@ -77,7 +79,7 @@ export async function initCommand(options: InitOptions): Promise<void> {
   }
 
   // ── 2. Detection phase ───────────────────────────────────────────────
-  const detection = await withSpinner('Analyzing repository...', () =>
+  let detection = await withSpinner('Analyzing repository...', () =>
     runHeuristicDetection(repoRoot),
   );
 
@@ -86,7 +88,7 @@ export async function initCommand(options: InitOptions): Promise<void> {
 
   const detectionOk = await confirmPrompt('Does this detection look correct?', true);
   if (!detectionOk) {
-    await correctDetection(detection);
+    detection = await correctDetection(detection);
   }
 
   const ciProvider = await selectPrompt<UserPreferences['ciProvider']>(
@@ -98,8 +100,22 @@ export async function initCommand(options: InitOptions): Promise<void> {
     ],
   );
 
-  // ── GitHub App installation check ────────────────────────────────────
-  if (ciProvider === 'github-actions') {
+  const aiPlatform = await selectPrompt<AIPlatform>(
+    'Which AI coding agent do you use?',
+    AI_PLATFORMS.map((p) => ({ name: `${p.name} — ${p.description}`, value: p.value })),
+  );
+
+  // Validate CLI availability
+  try {
+    validatePlatformCLI(aiPlatform);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    logger.error(msg);
+    return;
+  }
+
+  // ── Platform-specific setup check ────────────────────────────────────
+  if (aiPlatform === 'claude' && ciProvider === 'github-actions') {
     console.log();
     logger.warn('CodeFactory generates CI workflows that use the Claude Code GitHub Action.');
     logger.warn(
@@ -125,10 +141,20 @@ export async function initCommand(options: InitOptions): Promise<void> {
       );
       return;
     }
+  } else if (aiPlatform === 'kiro' && ciProvider === 'github-actions') {
+    console.log();
+    logger.info('Kiro-powered CI workflows require AWS credentials configured as GitHub secrets.');
+    logger.info('Ensure AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are set in your repo secrets.');
+    console.log();
+  } else if (aiPlatform === 'codex' && ciProvider === 'github-actions') {
+    console.log();
+    logger.info('Codex-powered CI workflows require an OpenAI API key as a GitHub secret.');
+    logger.info('Ensure OPENAI_API_KEY is set in your repo secrets.');
+    console.log();
   }
 
   // Build harness selection list
-  const tempRunner = new ClaudeRunner({ cwd: repoRoot });
+  const tempRunner = createRunner(aiPlatform, { cwd: repoRoot });
   const tempCtx: HarnessContext = {
     repoRoot,
     detection,
@@ -136,6 +162,7 @@ export async function initCommand(options: InitOptions): Promise<void> {
     fileWriter: new FileWriter(),
     userPreferences: {
       ciProvider,
+      aiPlatform,
       strictnessLevel: 'standard',
       selectedHarnesses: [],
     },
@@ -190,6 +217,7 @@ export async function initCommand(options: InitOptions): Promise<void> {
 
   const userPreferences: UserPreferences = {
     ciProvider,
+    aiPlatform,
     strictnessLevel,
     selectedHarnesses,
     customCriticalPaths,
@@ -205,7 +233,7 @@ export async function initCommand(options: InitOptions): Promise<void> {
   await ensureGitHubLabels(repoRoot, ciProvider);
 
   // ── 5. Harness execution ─────────────────────────────────────────────
-  const runner = new ClaudeRunner({ cwd: repoRoot });
+  const runner = createRunner(aiPlatform, { cwd: repoRoot });
   const fileWriter = new FileWriter();
   const previousOutputs = new Map<string, HarnessOutput>();
 
@@ -274,7 +302,8 @@ export async function initCommand(options: InitOptions): Promise<void> {
 
   const harnessRegistry = {
     version: '1.0.0',
-    repoRoot,
+    repoRoot: '.',
+    aiPlatform,
     detection: {
       primaryLanguage: detection.primaryLanguage,
       framework: detection.framework,
@@ -359,10 +388,12 @@ export async function initCommand(options: InitOptions): Promise<void> {
       const relativePaths = allFiles.map((f) => relative(repoRoot, f));
       const uniquePaths = [...new Set(relativePaths)];
 
-      await execAsync(`git add ${uniquePaths.map((p) => `"${p}"`).join(' ')}`, { cwd: repoRoot });
-      await execAsync(`git commit -m "chore: initialize harness engineering with CodeFactory"`, {
-        cwd: repoRoot,
-      });
+      await execFileAsync('git', ['add', ...uniquePaths], { cwd: repoRoot });
+      await execFileAsync(
+        'git',
+        ['commit', '-m', 'chore: initialize harness engineering with CodeFactory'],
+        { cwd: repoRoot },
+      );
       logger.success('Created commit: chore: initialize harness engineering with CodeFactory');
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -372,9 +403,11 @@ export async function initCommand(options: InitOptions): Promise<void> {
   }
 
   // Next steps
+  const instructionFile = INSTRUCTION_FILES[aiPlatform];
+
   console.log();
   logger.header('Next steps');
-  logger.info('1. Review the generated CLAUDE.md and harness.config.json files.');
+  logger.info(`1. Review the generated ${instructionFile} and harness.config.json files.`);
   logger.info('2. Run "npm run harness:smoke" to verify the harness setup works.');
   logger.info('3. Open a PR with these changes and observe the CI harness checks.');
   logger.info('4. Customize risk tiers and policies in harness.config.json as needed.');
@@ -403,8 +436,18 @@ async function ensureGitHubLabels(repoRoot: string, ciProvider: string): Promise
   logger.info('Ensuring GitHub labels exist...');
   for (const label of GITHUB_LABELS) {
     try {
-      execSync(
-        `gh label create "${label.name}" --color "${label.color}" --description "${label.description}" --force`,
+      execFileSync(
+        'gh',
+        [
+          'label',
+          'create',
+          label.name,
+          '--color',
+          label.color,
+          '--description',
+          label.description,
+          '--force',
+        ],
         { cwd: repoRoot, stdio: 'ignore' },
       );
     } catch {

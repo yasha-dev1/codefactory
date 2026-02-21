@@ -27,6 +27,7 @@ const baseDetection: DetectionResult = {
 
 const basePrefs: UserPreferences = {
   ciProvider: 'github-actions',
+  aiPlatform: 'claude',
   strictnessLevel: 'standard',
   selectedHarnesses: ['issue-implementer'],
 };

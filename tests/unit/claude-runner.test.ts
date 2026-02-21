@@ -22,8 +22,16 @@ function createMockChild(stdoutData: string, exitCode = 0) {
       this.push(null);
     },
   });
-  child.stderr = new Readable({ read() { this.push(null); } });
-  child.stdin = new Readable({ read() { this.push(null); } });
+  child.stderr = new Readable({
+    read() {
+      this.push(null);
+    },
+  });
+  child.stdin = new Readable({
+    read() {
+      this.push(null);
+    },
+  });
 
   // Emit close after stdout ends
   child.stdout.on('end', () => {
@@ -45,6 +53,10 @@ describe('ClaudeRunner', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     runner = new ClaudeRunner({ maxTurns: 5 });
+  });
+
+  it('should have platform set to claude', () => {
+    expect(runner.platform).toBe('claude');
   });
 
   describe('analyze()', () => {
@@ -98,9 +110,12 @@ describe('ClaudeRunner', () => {
         'claude',
         expect.arrayContaining([
           '--print',
-          '--output-format', 'stream-json',
-          '--max-turns', '5',
-          '--permission-mode', 'bypassPermissions',
+          '--output-format',
+          'stream-json',
+          '--max-turns',
+          '5',
+          '--permission-mode',
+          'bypassPermissions',
         ]),
         expect.objectContaining({
           stdio: ['inherit', 'pipe', 'inherit'],
@@ -115,8 +130,16 @@ describe('ClaudeRunner', () => {
         type: 'assistant',
         message: {
           content: [
-            { type: 'tool_use', name: 'Write', input: { file_path: '/project/harness.config.json', content: '{}' } },
-            { type: 'tool_use', name: 'Write', input: { file_path: '/project/CLAUDE.md', content: '# CLAUDE' } },
+            {
+              type: 'tool_use',
+              name: 'Write',
+              input: { file_path: '/project/harness.config.json', content: '{}' },
+            },
+            {
+              type: 'tool_use',
+              name: 'Write',
+              input: { file_path: '/project/CLAUDE.md', content: '# CLAUDE' },
+            },
           ],
         },
       });
@@ -133,7 +156,11 @@ describe('ClaudeRunner', () => {
         type: 'assistant',
         message: {
           content: [
-            { type: 'tool_use', name: 'Edit', input: { file_path: '/project/package.json', old_string: '"a"', new_string: '"b"' } },
+            {
+              type: 'tool_use',
+              name: 'Edit',
+              input: { file_path: '/project/package.json', old_string: '"a"', new_string: '"b"' },
+            },
           ],
         },
       });
@@ -149,8 +176,16 @@ describe('ClaudeRunner', () => {
         type: 'assistant',
         message: {
           content: [
-            { type: 'tool_use', name: 'Write', input: { file_path: '/project/config.json', content: '{}' } },
-            { type: 'tool_use', name: 'Edit', input: { file_path: '/project/config.json', old_string: '{}', new_string: '{"a":1}' } },
+            {
+              type: 'tool_use',
+              name: 'Write',
+              input: { file_path: '/project/config.json', content: '{}' },
+            },
+            {
+              type: 'tool_use',
+              name: 'Edit',
+              input: { file_path: '/project/config.json', old_string: '{}', new_string: '{"a":1}' },
+            },
           ],
         },
       });
