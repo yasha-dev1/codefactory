@@ -49,7 +49,7 @@ export function extractJson(text: string): string {
     return fenceMatch[1].trim();
   }
 
-  const jsonMatch = text.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
+  const jsonMatch = text.match(/(\{[\s\S]*?\}|\[[\s\S]*?\])/);
   if (jsonMatch) {
     return jsonMatch[1].trim();
   }

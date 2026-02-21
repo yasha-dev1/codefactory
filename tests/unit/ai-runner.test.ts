@@ -41,4 +41,10 @@ describe('extractJson', () => {
     const input = '{"clean": true}';
     expect(extractJson(input)).toBe('{"clean": true}');
   });
+
+  it('should not greedily match across multiple JSON objects', () => {
+    const input = 'first: {"a": 1} then second: {"b": 2}';
+    const result = extractJson(input);
+    expect(JSON.parse(result)).toEqual({ a: 1 });
+  });
 });

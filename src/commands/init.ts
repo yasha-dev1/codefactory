@@ -302,7 +302,7 @@ export async function initCommand(options: InitOptions): Promise<void> {
 
   const harnessRegistry = {
     version: '1.0.0',
-    repoRoot,
+    repoRoot: '.',
     aiPlatform,
     detection: {
       primaryLanguage: detection.primaryLanguage,

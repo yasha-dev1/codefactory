@@ -8,6 +8,7 @@ import {
   getHeadSha,
   hasUncommittedChanges,
   snapshotUntrackedFiles,
+  snapshotModifiedFiles,
   diffWorkingTree,
 } from '../../src/utils/git.js';
 
@@ -91,6 +92,35 @@ describe('git utility functions', () => {
     });
   });
 
+  describe('snapshotModifiedFiles', () => {
+    it('should return empty set for clean repo', () => {
+      const result = snapshotModifiedFiles(repoDir);
+      expect(result.size).toBe(0);
+    });
+
+    it('should detect modified tracked files', async () => {
+      await execAsync(
+        'echo "original" > tracked.txt && git add tracked.txt && git commit -m "add"',
+        { cwd: repoDir },
+      );
+      await execAsync('echo "changed" > tracked.txt', { cwd: repoDir });
+      const result = snapshotModifiedFiles(repoDir);
+      expect(result.has('tracked.txt')).toBe(true);
+    });
+
+    it('should return empty set for repo with no commits', async () => {
+      const freshRepo = await mkdtemp(join(tmpdir(), 'codefactory-no-head-mod-'));
+      await execAsync('git init', { cwd: freshRepo });
+
+      try {
+        const result = snapshotModifiedFiles(freshRepo);
+        expect(result.size).toBe(0);
+      } finally {
+        await rm(freshRepo, { recursive: true, force: true });
+      }
+    });
+  });
+
   describe('diffWorkingTree', () => {
     it('should detect newly created files', async () => {
       const before = snapshotUntrackedFiles(repoDir);
@@ -127,6 +157,25 @@ describe('git utility functions', () => {
       const { created, modified } = diffWorkingTree(before, repoDir);
       expect(created).toEqual([]);
       expect(modified).toEqual([]);
+    });
+
+    it('should filter pre-existing modifications when beforeModified is provided', async () => {
+      // Create two tracked files
+      await execAsync(
+        'echo "a" > pre-existing.txt && echo "b" > new-change.txt && git add . && git commit -m "add"',
+        { cwd: repoDir },
+      );
+      // Modify both files before "CLI run"
+      await execAsync('echo "changed-a" > pre-existing.txt', { cwd: repoDir });
+      const beforeModified = snapshotModifiedFiles(repoDir);
+      const beforeUntracked = snapshotUntrackedFiles(repoDir);
+
+      // Simulate CLI modifying only new-change.txt (both are now modified in git diff)
+      await execAsync('echo "changed-b" > new-change.txt', { cwd: repoDir });
+
+      const { modified } = diffWorkingTree(beforeUntracked, repoDir, beforeModified);
+      expect(modified).toContain('new-change.txt');
+      expect(modified).not.toContain('pre-existing.txt');
     });
 
     it('should handle repo with no commits (no HEAD)', async () => {

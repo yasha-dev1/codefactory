@@ -164,7 +164,7 @@ ${buildCriticalPathsSection(detection)}
 `;
 
     // 2. Build the prompt with reference context
-    const basePrompt = buildClaudeMdPrompt(detection, userPreferences, aiPlatform);
+    const basePrompt = buildClaudeMdPrompt(detection, userPreferences);
     const prompt = `${basePrompt}
 
 ## Reference Implementation

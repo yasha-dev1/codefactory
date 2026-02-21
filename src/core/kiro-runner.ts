@@ -4,7 +4,7 @@ import chalk from 'chalk';
 
 import type { AIRunner, AIRunnerOptions, AIPlatform, GenerateResult } from './ai-runner.js';
 import { extractJson } from './ai-runner.js';
-import { snapshotUntrackedFiles, diffWorkingTree } from '../utils/git.js';
+import { snapshotUntrackedFiles, snapshotModifiedFiles, diffWorkingTree } from '../utils/git.js';
 
 interface RunResult {
   resultText: string;
@@ -42,6 +42,7 @@ export class KiroRunner implements AIRunner {
   async generate(prompt: string, systemPromptAppend?: string): Promise<GenerateResult> {
     const cwd = this.options.cwd ?? process.cwd();
     const beforeUntracked = snapshotUntrackedFiles(cwd);
+    const beforeModified = snapshotModifiedFiles(cwd);
 
     const systemPrompt = [this.options.systemPrompt, systemPromptAppend].filter(Boolean).join('\n');
 
@@ -50,7 +51,7 @@ export class KiroRunner implements AIRunner {
       trustTools: 'all',
     });
 
-    const { created, modified } = diffWorkingTree(beforeUntracked, cwd);
+    const { created, modified } = diffWorkingTree(beforeUntracked, cwd, beforeModified);
     return { filesCreated: created, filesModified: modified };
   }
 
@@ -65,7 +66,7 @@ export class KiroRunner implements AIRunner {
 
     const args = ['chat', '--no-interactive'];
 
-    if (this.options.maxTurns) {
+    if (this.options.maxTurns != null) {
       args.push('--max-turns', String(this.options.maxTurns));
     }
 

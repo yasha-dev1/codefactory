@@ -108,7 +108,7 @@ describe('claudeMdHarness', () => {
 
     await claudeMdHarness.execute(ctx);
 
-    expect(buildClaudeMdPrompt).toHaveBeenCalledWith(ctx.detection, ctx.userPreferences, 'claude');
+    expect(buildClaudeMdPrompt).toHaveBeenCalledWith(ctx.detection, ctx.userPreferences);
   });
 
   it('should store output in previousOutputs map', async () => {

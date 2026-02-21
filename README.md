@@ -2,7 +2,7 @@
 
 **Automated harness engineering for AI coding agents.**
 
-CodeFactory is a CLI tool that sets up production-grade CI pipelines, code review agents, issue automation, and safety gates for any repository -- all tailored to your stack. Run `codefactory init` and it uses an AI coding agent (Claude Code, with Kiro and Codex coming soon) to analyze your repo and generate everything.
+CodeFactory is a CLI tool that sets up production-grade CI pipelines, code review agents, issue automation, and safety gates for any repository -- all tailored to your stack. Run `codefactory init` and it uses an AI coding agent (Claude Code, AWS Kiro, or OpenAI Codex) to analyze your repo and generate everything.
 
 ## The Problem
 
@@ -488,7 +488,7 @@ CLI (Commander)
 
 **Core modules:**
 
-- `src/core/ai-runner.ts` -- Defines the `AIRunner` interface and shared types. `src/core/claude-runner.ts` wraps the Claude Code Agent SDK. Provides `analyze()` for structured JSON extraction (read-only tools, Zod schema validation) and `generate()` for file creation (read + write tools). Kiro and Codex runners are stubbed for future integration.
+- `src/core/ai-runner.ts` -- Defines the `AIRunner` interface and shared types. Three runner implementations (`claude-runner.ts`, `kiro-runner.ts`, `codex-runner.ts`) each provide `analyze()` for structured JSON extraction and `generate()` for file creation, tailored to their platform's CLI.
 - `src/core/detector.ts` -- Two-phase stack detection: fast heuristics (file existence checks, package.json parsing) followed by Claude-powered deep analysis.
 - `src/core/config.ts` -- Loads and saves `harness.config.json`.
 - `src/core/file-writer.ts` -- Tracks created and modified files during harness generation.
@@ -516,7 +516,7 @@ npm run typecheck
 ## Requirements
 
 - **Node.js** >= 20
-- **Claude Code CLI** installed and authenticated (`npm install -g @anthropic-ai/claude-code`), or an alternative AI provider CLI (`kiro`, `codex`) once supported
+- **AI coding agent CLI** installed and authenticated: Claude Code (`claude`), AWS Kiro (`kiro-cli`), or OpenAI Codex (`codex`)
 
 ## License
 

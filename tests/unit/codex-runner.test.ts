@@ -1,7 +1,7 @@
 import { CodexRunner } from '../../src/core/codex-runner.js';
 import { z } from 'zod';
 import { spawn } from 'child_process';
-import { EventEmitter, Readable } from 'stream';
+import { createMockChild, mockSpawnWith } from './helpers/mock-child-process.js';
 
 vi.mock('child_process', () => ({
   spawn: vi.fn(),
@@ -9,50 +9,20 @@ vi.mock('child_process', () => ({
 
 vi.mock('../../src/utils/git.js', () => ({
   snapshotUntrackedFiles: vi.fn(),
+  snapshotModifiedFiles: vi.fn(),
   diffWorkingTree: vi.fn(),
 }));
 
-import { snapshotUntrackedFiles, diffWorkingTree } from '../../src/utils/git.js';
+import {
+  snapshotUntrackedFiles,
+  snapshotModifiedFiles,
+  diffWorkingTree,
+} from '../../src/utils/git.js';
 
 const mockedSpawn = vi.mocked(spawn);
 const mockedSnapshotUntrackedFiles = vi.mocked(snapshotUntrackedFiles);
+const mockedSnapshotModifiedFiles = vi.mocked(snapshotModifiedFiles);
 const mockedDiffWorkingTree = vi.mocked(diffWorkingTree);
-
-function createMockChild(stdoutData: string, exitCode = 0) {
-  const child = new EventEmitter() as EventEmitter & {
-    stdout: Readable;
-    stderr: Readable;
-    stdin: Readable;
-  };
-  child.stdout = new Readable({
-    read() {
-      this.push(stdoutData);
-      this.push(null);
-    },
-  });
-  child.stderr = new Readable({
-    read() {
-      this.push(null);
-    },
-  });
-  child.stdin = new Readable({
-    read() {
-      this.push(null);
-    },
-  });
-
-  child.stdout.on('end', () => {
-    setTimeout(() => child.emit('close', exitCode), 0);
-  });
-
-  return child;
-}
-
-function mockSpawnWith(stdoutData: string, exitCode = 0) {
-  const child = createMockChild(stdoutData, exitCode);
-  mockedSpawn.mockReturnValue(child as any);
-  return child;
-}
 
 describe('CodexRunner', () => {
   let runner: CodexRunner;
@@ -61,6 +31,7 @@ describe('CodexRunner', () => {
     vi.clearAllMocks();
     runner = new CodexRunner({ maxTurns: 5 });
     mockedSnapshotUntrackedFiles.mockReturnValue(new Set());
+    mockedSnapshotModifiedFiles.mockReturnValue(new Set());
     mockedDiffWorkingTree.mockReturnValue({ created: [], modified: [] });
   });
 
@@ -73,7 +44,7 @@ describe('CodexRunner', () => {
       const expectedData = { name: 'test-project', language: 'python' };
       const schema = z.object({ name: z.string(), language: z.string() });
 
-      mockSpawnWith(JSON.stringify(expectedData) + '\n');
+      mockSpawnWith(mockedSpawn, JSON.stringify(expectedData) + '\n');
 
       const result = await runner.analyze('Analyze this project', schema);
       expect(result).toEqual(expectedData);
@@ -82,7 +53,7 @@ describe('CodexRunner', () => {
     it('should extract JSON from markdown code fences', async () => {
       const schema = z.object({ count: z.number() });
 
-      mockSpawnWith('```json\n{"count": 42}\n```\n');
+      mockSpawnWith(mockedSpawn, '```json\n{"count": 42}\n```\n');
 
       const result = await runner.analyze('Count items', schema);
       expect(result).toEqual({ count: 42 });
@@ -90,7 +61,7 @@ describe('CodexRunner', () => {
 
     it('should pass correct CLI args to spawn', async () => {
       const schema = z.object({ ok: z.boolean() });
-      mockSpawnWith('{"ok": true}\n');
+      mockSpawnWith(mockedSpawn, '{"ok": true}\n');
 
       await runner.analyze('Test prompt', schema);
 
@@ -114,7 +85,7 @@ describe('CodexRunner', () => {
     });
 
     it('should throw on invalid JSON in analyze response', async () => {
-      mockSpawnWith('not valid json at all\n');
+      mockSpawnWith(mockedSpawn, 'not valid json at all\n');
 
       const schema = z.object({ data: z.string() });
       await expect(runner.analyze('Test', schema)).rejects.toThrow();
@@ -124,12 +95,13 @@ describe('CodexRunner', () => {
   describe('generate()', () => {
     it('should track files via git-diff', async () => {
       mockedSnapshotUntrackedFiles.mockReturnValue(new Set());
+      mockedSnapshotModifiedFiles.mockReturnValue(new Set());
       mockedDiffWorkingTree.mockReturnValue({
         created: ['harness.config.json', 'CODEX.md'],
         modified: ['package.json'],
       });
 
-      mockSpawnWith('Done generating files.\n');
+      mockSpawnWith(mockedSpawn, 'Done generating files.\n');
 
       const result = await runner.generate('Generate files');
       expect(result.filesCreated).toEqual(['harness.config.json', 'CODEX.md']);
@@ -137,7 +109,7 @@ describe('CodexRunner', () => {
     });
 
     it('should pass correct CLI args for generate', async () => {
-      mockSpawnWith('Done.\n');
+      mockSpawnWith(mockedSpawn, 'Done.\n');
 
       await runner.generate('Generate files');
 
@@ -150,19 +122,20 @@ describe('CodexRunner', () => {
       );
     });
 
-    it('should snapshot untracked files before running', async () => {
-      mockSpawnWith('Done.\n');
+    it('should snapshot untracked and modified files before running', async () => {
+      mockSpawnWith(mockedSpawn, 'Done.\n');
 
       await runner.generate('Generate files');
 
       expect(mockedSnapshotUntrackedFiles).toHaveBeenCalled();
+      expect(mockedSnapshotModifiedFiles).toHaveBeenCalled();
       expect(mockedDiffWorkingTree).toHaveBeenCalled();
     });
   });
 
   describe('error handling', () => {
     it('should reject when codex exits with non-zero code', async () => {
-      mockSpawnWith('\n', 1);
+      mockSpawnWith(mockedSpawn, '\n', 1);
 
       const schema = z.object({ data: z.string() });
       await expect(runner.analyze('Test', schema)).rejects.toThrow('codex exited with code 1');

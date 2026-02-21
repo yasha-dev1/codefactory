@@ -147,6 +147,23 @@ describe('skillsInstallerHarness', () => {
     expect(output.metadata?.skillsInstalled).toEqual(['check-docs', 'chrome-devtools']);
   });
 
+  it('should use platform-specific instruction file in check-docs skill', async () => {
+    const ctx = createMockContext({
+      runner: {
+        generate: vi.fn(),
+        analyze: vi.fn(),
+        platform: 'kiro' as const,
+      } as unknown as AIRunner,
+    });
+    await skillsInstallerHarness.execute(ctx);
+
+    const calls = vi.mocked(ctx.fileWriter.write).mock.calls;
+    const checkDocsCall = calls.find((c) => c[0].endsWith(join('check-docs', 'SKILL.md')));
+    expect(checkDocsCall).toBeDefined();
+    expect(checkDocsCall![1]).toContain('KIRO.md');
+    expect(checkDocsCall![1]).not.toContain('Claude Code Docs Section');
+  });
+
   it('should not call runner.generate', async () => {
     const ctx = createMockContext();
     await skillsInstallerHarness.execute(ctx);

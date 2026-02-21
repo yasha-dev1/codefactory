@@ -1,17 +1,12 @@
 import { INSTRUCTION_FILES } from '../core/ai-runner.js';
-import type { AIPlatform } from '../core/ai-runner.js';
 import type { DetectionResult, UserPreferences } from './types.js';
 
 /**
  * Prompt for generating the agent instructions file (CLAUDE.md, KIRO.md, or CODEX.md).
  */
-export function buildClaudeMdPrompt(
-  detection: DetectionResult,
-  prefs: UserPreferences,
-  aiPlatform: AIPlatform,
-): string {
+export function buildClaudeMdPrompt(detection: DetectionResult, prefs: UserPreferences): string {
   const criticalPaths = [...detection.criticalPaths, ...(prefs.customCriticalPaths ?? [])];
-  const instructionFile = INSTRUCTION_FILES[aiPlatform];
+  const instructionFile = INSTRUCTION_FILES[prefs.aiPlatform];
 
   return `Generate a \`${instructionFile}\` file for this repository. ${instructionFile} is the primary instruction file that AI coding agents read before making changes. It must be concise (~100 lines), authoritative, and contain everything an agent needs to work safely in this codebase.
 

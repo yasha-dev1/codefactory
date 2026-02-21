@@ -49,6 +49,19 @@ export function snapshotUntrackedFiles(cwd: string): Set<string> {
   return new Set(output.split('\n').filter(Boolean));
 }
 
+export function snapshotModifiedFiles(cwd: string): Set<string> {
+  try {
+    const output = execFileSync('git', ['diff', 'HEAD', '--name-only'], {
+      cwd,
+      encoding: 'utf-8',
+    });
+    return new Set(output.split('\n').filter(Boolean));
+  } catch {
+    // HEAD doesn't exist (no commits yet) — no tracked files to modify
+    return new Set();
+  }
+}
+
 /**
  * Compares the working tree against a pre-run snapshot to detect created/modified files.
  *
@@ -59,6 +72,7 @@ export function snapshotUntrackedFiles(cwd: string): Set<string> {
 export function diffWorkingTree(
   beforeUntracked: Set<string>,
   cwd: string,
+  beforeModified?: Set<string>,
 ): { created: string[]; modified: string[] } {
   // Use HEAD to catch both staged and unstaged modifications.
   // On a fresh repo with no commits, HEAD doesn't exist — treat as no modifications.
@@ -68,7 +82,8 @@ export function diffWorkingTree(
       cwd,
       encoding: 'utf-8',
     });
-    modified = diffOutput.split('\n').filter(Boolean);
+    const allModified = diffOutput.split('\n').filter(Boolean);
+    modified = beforeModified ? allModified.filter((f) => !beforeModified.has(f)) : allModified;
   } catch {
     // HEAD doesn't exist (no commits yet) — all files are new, none modified
   }
