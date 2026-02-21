@@ -1,4 +1,13 @@
+import { readFileSync } from 'node:fs';
+
 import { defineConfig } from 'tsup';
+
+// Read runtime dependency names from package.json to bundle them into the
+// standalone release binary.
+const pkg = JSON.parse(readFileSync('package.json', 'utf-8')) as {
+  dependencies?: Record<string, string>;
+};
+const runtimeDeps = Object.keys(pkg.dependencies ?? {});
 
 export default defineConfig({
   entry: ['src/index.ts'],
@@ -9,8 +18,11 @@ export default defineConfig({
   splitting: false,
   sourcemap: false,
   dts: false,
-  noExternal: [/.*/],
+  noExternal: runtimeDeps,
   banner: {
-    js: '#!/usr/bin/env node',
+    // Shebang + createRequire shim: CJS packages bundled into ESM (e.g.
+    // commander) call require('events') etc. In ESM there is no require
+    // function, so we create one from import.meta.url.
+    js: '#!/usr/bin/env node\nimport { createRequire } from "node:module";\nconst require = createRequire(import.meta.url);',
   },
 });
