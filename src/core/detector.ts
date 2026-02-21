@@ -4,6 +4,8 @@ import { fileExists, readFileIfExists } from '../utils/fs.js';
 
 export interface DetectionResult {
   primaryLanguage: string;
+  languages: string[];
+  hasTypeScript: boolean;
   framework: string | null;
   packageManager: string | null;
   testFramework: string | null;
@@ -26,6 +28,8 @@ export interface DetectionResult {
 export async function runHeuristicDetection(repoRoot: string): Promise<DetectionResult> {
   const result: DetectionResult = {
     primaryLanguage: 'unknown',
+    languages: [],
+    hasTypeScript: false,
     framework: null,
     packageManager: null,
     testFramework: null,
@@ -262,7 +266,9 @@ export async function runHeuristicDetection(repoRoot: string): Promise<Detection
     }
   }
 
-  // Set primary language
+  // Set language fields
+  result.languages = languages;
+  result.hasTypeScript = hasTypeScript;
   result.primaryLanguage = hasTypeScript ? 'TypeScript' : (languages[0] ?? 'unknown');
 
   return result;
