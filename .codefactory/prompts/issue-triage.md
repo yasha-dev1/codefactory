@@ -27,6 +27,18 @@ You are a triage agent. Your task is to evaluate a GitHub issue for quality, com
 - Should this be broken into smaller issues?
 - Does it touch critical paths that require extra review?
 
+## Before Triaging
+
+**Check docs first**: Invoke the `/check-docs` skill (`.claude/skills/check-docs/SKILL.md`) to orient yourself on current Claude Code patterns and project conventions before assessing the issue.
+
+**Use Chrome DevTools for UI/frontend issues**: For any issue involving UI, frontend, browser behavior, console errors, or visual bugs, you MUST invoke the `/chrome-devtools` skill (`.claude/skills/chrome-devtools/SKILL.md`) and use the Chrome DevTools MCP server to inspect the actual browser state. Do not estimate confidence or write a triage report for a UI bug without first checking:
+
+1. `list_console_messages` — errors that appear on page load
+2. `take_screenshot` — current visual state
+3. `list_network_requests` — failed API calls
+
+Include the console output, screenshot, and network failures in your `reproductionNotes` field.
+
 ## Bug Reproduction
 
 If the issue appears to be a **UI bug** or **visual bug** and includes reproduction steps:
