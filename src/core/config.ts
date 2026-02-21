@@ -1,13 +1,10 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
-
-import type { AIPlatform } from './ai-runner.js';
 import { fileExists } from '../utils/fs.js';
 
 export interface HarnessConfig {
   version: string;
   repoRoot: string;
-  aiPlatform?: AIPlatform;
   detection: {
     primaryLanguage: string;
     framework: string | null;
