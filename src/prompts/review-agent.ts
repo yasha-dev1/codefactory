@@ -27,6 +27,7 @@ A CI workflow triggered on pull_request events (opened, synchronize). It must:
 - Check out the PR at the exact head SHA
 - Read the risk-policy-gate output to determine the tier and changed files
 - Skip if tier < 2 (Tier 1 changes don't need review agent)
+- **When Tier 1 is detected**: post a SHA-deduped PR comment (marker: \`<!-- harness-tier1-skip: <head-sha> -->\`) informing the PR author that the review agent will not run for this tier. Check existing comments before posting to avoid duplicates on re-runs.
 - Perform SHA deduplication before running (see below)
 - Invoke Claude Code to review the diff with the review prompt
 - Post a structured review comment on the PR
