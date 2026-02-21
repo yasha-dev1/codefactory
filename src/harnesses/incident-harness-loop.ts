@@ -46,7 +46,7 @@ ${refMetricsWorkflow}
 \`\`\``;
 
     // 3. Call Claude runner
-    const systemPrompt = buildSystemPrompt();
+    const systemPrompt = buildSystemPrompt(ctx.runner.platform);
     try {
       const result = await ctx.runner.generate(prompt, systemPrompt);
       const output: HarnessOutput = {

@@ -1,12 +1,24 @@
+import type { AIPlatform } from '../core/ai-runner.js';
 import type { DetectionResult, UserPreferences } from './types.js';
 
-/**
- * Prompt for generating the CLAUDE.md agent instructions file.
- */
-export function buildClaudeMdPrompt(detection: DetectionResult, prefs: UserPreferences): string {
-  const criticalPaths = [...detection.criticalPaths, ...(prefs.customCriticalPaths ?? [])];
+const INSTRUCTION_FILES: Record<AIPlatform, string> = {
+  claude: 'CLAUDE.md',
+  kiro: 'KIRO.md',
+  codex: 'CODEX.md',
+};
 
-  return `Generate a \`CLAUDE.md\` file for this repository. CLAUDE.md is the primary instruction file that AI coding agents (Claude Code, Cursor, etc.) read before making changes. It must be concise (~100 lines), authoritative, and contain everything an agent needs to work safely in this codebase.
+/**
+ * Prompt for generating the agent instructions file (CLAUDE.md, KIRO.md, or CODEX.md).
+ */
+export function buildClaudeMdPrompt(
+  detection: DetectionResult,
+  prefs: UserPreferences,
+  aiPlatform: AIPlatform = 'claude',
+): string {
+  const criticalPaths = [...detection.criticalPaths, ...(prefs.customCriticalPaths ?? [])];
+  const instructionFile = INSTRUCTION_FILES[aiPlatform];
+
+  return `Generate a \`${instructionFile}\` file for this repository. ${instructionFile} is the primary instruction file that AI coding agents read before making changes. It must be concise (~100 lines), authoritative, and contain everything an agent needs to work safely in this codebase.
 
 ## Detected Stack Context
 

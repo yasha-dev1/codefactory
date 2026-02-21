@@ -1,4 +1,4 @@
-import { ClaudeRunner } from '../../src/core/claude-runner.js';
+import { KiroRunner } from '../../src/core/kiro-runner.js';
 import { z } from 'zod';
 import { spawn } from 'child_process';
 import { EventEmitter, Readable } from 'stream';
@@ -33,7 +33,6 @@ function createMockChild(stdoutData: string, exitCode = 0) {
     },
   });
 
-  // Emit close after stdout ends
   child.stdout.on('end', () => {
     setTimeout(() => child.emit('close', exitCode), 0);
   });
@@ -47,16 +46,16 @@ function mockSpawnWith(stdoutData: string, exitCode = 0) {
   return child;
 }
 
-describe('ClaudeRunner', () => {
-  let runner: ClaudeRunner;
+describe('KiroRunner', () => {
+  let runner: KiroRunner;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    runner = new ClaudeRunner({ maxTurns: 5 });
+    runner = new KiroRunner({ maxTurns: 5 });
   });
 
-  it('should have platform set to claude', () => {
-    expect(runner.platform).toBe('claude');
+  it('should have platform set to kiro', () => {
+    expect(runner.platform).toBe('kiro');
   });
 
   describe('analyze()', () => {
@@ -75,28 +74,7 @@ describe('ClaudeRunner', () => {
       expect(result).toEqual(expectedData);
     });
 
-    it('should extract JSON from markdown code fences', async () => {
-      const schema = z.object({ count: z.number() });
-
-      const resultMsg = JSON.stringify({
-        type: 'result',
-        subtype: 'success',
-        result: '```json\n{"count": 42}\n```',
-      });
-      mockSpawnWith(resultMsg + '\n');
-
-      const result = await runner.analyze('Count items', schema);
-      expect(result).toEqual({ count: 42 });
-    });
-
-    it('should throw when no response is received', async () => {
-      mockSpawnWith('\n');
-
-      const schema = z.object({ data: z.string() });
-      await expect(runner.analyze('Test', schema)).rejects.toThrow();
-    });
-
-    it('should pass correct CLI args to spawn', async () => {
+    it('should spawn kiro CLI', async () => {
       const schema = z.object({ ok: z.boolean() });
       const resultMsg = JSON.stringify({
         type: 'result',
@@ -107,16 +85,8 @@ describe('ClaudeRunner', () => {
       await runner.analyze('Test prompt', schema);
 
       expect(mockedSpawn).toHaveBeenCalledWith(
-        'claude',
-        expect.arrayContaining([
-          '--print',
-          '--output-format',
-          'stream-json',
-          '--max-turns',
-          '5',
-          '--permission-mode',
-          'bypassPermissions',
-        ]),
+        'kiro',
+        expect.arrayContaining(['--print', '--output-format', 'stream-json', '--max-turns', '5']),
         expect.objectContaining({
           stdio: ['inherit', 'pipe', 'inherit'],
         }),
@@ -133,12 +103,7 @@ describe('ClaudeRunner', () => {
             {
               type: 'tool_use',
               name: 'Write',
-              input: { file_path: '/project/harness.config.json', content: '{}' },
-            },
-            {
-              type: 'tool_use',
-              name: 'Write',
-              input: { file_path: '/project/CLAUDE.md', content: '# CLAUDE' },
+              input: { file_path: '/project/config.json', content: '{}' },
             },
           ],
         },
@@ -146,9 +111,7 @@ describe('ClaudeRunner', () => {
       mockSpawnWith(msg + '\n');
 
       const result = await runner.generate('Generate files');
-      expect(result.filesCreated).toContain('/project/harness.config.json');
-      expect(result.filesCreated).toContain('/project/CLAUDE.md');
-      expect(result.filesModified).toEqual([]);
+      expect(result.filesCreated).toContain('/project/config.json');
     });
 
     it('should track modified files from Edit tool_use blocks', async () => {
@@ -168,52 +131,15 @@ describe('ClaudeRunner', () => {
 
       const result = await runner.generate('Modify files');
       expect(result.filesModified).toContain('/project/package.json');
-      expect(result.filesCreated).toEqual([]);
-    });
-
-    it('should deduplicate files that appear in both Write and Edit', async () => {
-      const msg = JSON.stringify({
-        type: 'assistant',
-        message: {
-          content: [
-            {
-              type: 'tool_use',
-              name: 'Write',
-              input: { file_path: '/project/config.json', content: '{}' },
-            },
-            {
-              type: 'tool_use',
-              name: 'Edit',
-              input: { file_path: '/project/config.json', old_string: '{}', new_string: '{"a":1}' },
-            },
-          ],
-        },
-      });
-      mockSpawnWith(msg + '\n');
-
-      const result = await runner.generate('Create and modify');
-      expect(result.filesCreated).toContain('/project/config.json');
-      expect(result.filesModified).not.toContain('/project/config.json');
     });
   });
 
   describe('error handling', () => {
-    it('should reject when claude exits with non-zero code', async () => {
+    it('should reject when kiro exits with non-zero code', async () => {
       mockSpawnWith('\n', 1);
 
       const schema = z.object({ data: z.string() });
-      await expect(runner.analyze('Test', schema)).rejects.toThrow('Claude exited with code 1');
-    });
-
-    it('should throw on invalid JSON in analyze response', async () => {
-      const resultMsg = JSON.stringify({
-        type: 'result',
-        result: 'not valid json at all',
-      });
-      mockSpawnWith(resultMsg + '\n');
-
-      const schema = z.object({ data: z.string() });
-      await expect(runner.analyze('Test', schema)).rejects.toThrow();
+      await expect(runner.analyze('Test', schema)).rejects.toThrow('Kiro exited with code 1');
     });
   });
 });

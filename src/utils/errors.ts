@@ -48,3 +48,22 @@ export class ChecksumError extends UpdateError {
     this.name = 'ChecksumError';
   }
 }
+
+const PLATFORM_INSTALL_INSTRUCTIONS: Record<string, string> = {
+  claude: 'Install Claude Code: npm install -g @anthropic-ai/claude-code',
+  kiro: 'Install AWS Kiro: see https://kiro.dev/docs/install',
+  codex: 'Install OpenAI Codex: npm install -g @openai/codex',
+};
+
+export class PlatformCLINotFoundError extends Error {
+  readonly platform: string;
+  readonly binary: string;
+
+  constructor(platform: string, binary: string) {
+    const instructions = PLATFORM_INSTALL_INSTRUCTIONS[platform] ?? `Install the ${platform} CLI`;
+    super(`${binary} CLI not found in PATH. ${instructions}`);
+    this.name = 'PlatformCLINotFoundError';
+    this.platform = platform;
+    this.binary = binary;
+  }
+}

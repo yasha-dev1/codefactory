@@ -2,7 +2,7 @@ import { join } from 'node:path';
 
 import { skillsInstallerHarness } from '../../../src/harnesses/skills-installer.js';
 import type { HarnessContext } from '../../../src/harnesses/types.js';
-import type { ClaudeRunner } from '../../../src/core/claude-runner.js';
+import type { AIRunner } from '../../../src/core/ai-runner.js';
 import type { FileWriter } from '../../../src/core/file-writer.js';
 import type { DetectionResult } from '../../../src/core/detector.js';
 
@@ -62,12 +62,14 @@ function createMockContext(overrides?: Partial<HarnessContext>): HarnessContext 
     runner: {
       generate: vi.fn(),
       analyze: vi.fn(),
-    } as unknown as ClaudeRunner,
+      platform: 'claude' as const,
+    } as unknown as AIRunner,
     fileWriter: createMockFileWriter(),
     userPreferences: {
       ciProvider: 'github-actions',
       strictnessLevel: 'standard',
       selectedHarnesses: ['skills-installer'],
+      aiPlatform: 'claude' as const,
     },
     previousOutputs: new Map(),
     ...overrides,

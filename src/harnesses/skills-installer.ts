@@ -1,6 +1,13 @@
 import { join } from 'node:path';
 
+import type { AIPlatform } from '../core/ai-runner.js';
 import type { HarnessModule, HarnessContext, HarnessOutput } from './types.js';
+
+const SKILLS_DIRS: Record<AIPlatform, string> = {
+  claude: '.claude/skills',
+  kiro: '.kiro/extensions',
+  codex: '.codex/tools',
+};
 
 const CHECK_DOCS_SKILL = `---
 name: check-docs
@@ -281,7 +288,7 @@ const SKILLS: Array<{ name: string; content: string }> = [
 export const skillsInstallerHarness: HarnessModule = {
   name: 'skills-installer',
   displayName: 'Skills Installer',
-  description: 'Installs Claude Code skills into .claude/skills/, merging with any existing skills',
+  description: 'Installs agent skills/extensions into the platform-specific directory',
   order: 17,
 
   isApplicable(): boolean {
@@ -292,11 +299,12 @@ export const skillsInstallerHarness: HarnessModule = {
     const { repoRoot, fileWriter } = ctx;
     const filesCreated: string[] = [];
     const filesModified: string[] = [];
+    const skillsDir = SKILLS_DIRS[ctx.runner.platform];
 
     const snap = fileWriter.snapshot();
 
     for (const skill of SKILLS) {
-      const destPath = join(repoRoot, '.claude', 'skills', skill.name, 'SKILL.md');
+      const destPath = join(repoRoot, skillsDir, skill.name, 'SKILL.md');
       await fileWriter.write(destPath, skill.content);
     }
 

@@ -4,9 +4,7 @@ import chalk from 'chalk';
 
 import type { AIRunner, AIPlatform, GenerateResult } from './ai-runner.js';
 
-export type { GenerateResult };
-
-export interface ClaudeRunnerOptions {
+export interface KiroRunnerOptions {
   maxTurns?: number;
   systemPrompt?: string;
   cwd?: string;
@@ -16,12 +14,6 @@ interface StreamMessage {
   type: string;
   subtype?: string;
   result?: string;
-  content_block?: {
-    type: string;
-    text?: string;
-    name?: string;
-    input?: Record<string, unknown>;
-  };
   message?: {
     content: Array<{
       type: string;
@@ -38,11 +30,11 @@ interface RunResult {
   filesModified: string[];
 }
 
-export class ClaudeRunner implements AIRunner {
-  readonly platform: AIPlatform = 'claude';
-  private readonly options: ClaudeRunnerOptions;
+export class KiroRunner implements AIRunner {
+  readonly platform: AIPlatform = 'kiro';
+  private readonly options: KiroRunnerOptions;
 
-  constructor(options: ClaudeRunnerOptions = {}) {
+  constructor(options: KiroRunnerOptions = {}) {
     this.options = options;
   }
 
@@ -115,7 +107,7 @@ export class ClaudeRunner implements AIRunner {
     args.push(prompt);
 
     return new Promise((resolve, reject) => {
-      const child = spawn('claude', args, {
+      const child = spawn('kiro', args, {
         cwd,
         stdio: ['inherit', 'pipe', 'inherit'],
         env: { ...process.env },
@@ -129,7 +121,6 @@ export class ClaudeRunner implements AIRunner {
       child.stdout.on('data', (chunk: Buffer) => {
         buffer += chunk.toString();
         const lines = buffer.split('\n');
-        // Keep the last incomplete line in the buffer
         buffer = lines.pop() ?? '';
 
         for (const line of lines) {
@@ -141,7 +132,6 @@ export class ClaudeRunner implements AIRunner {
       });
 
       child.on('close', (code) => {
-        // Process any remaining buffer
         if (buffer.trim()) {
           this.processStreamLine(buffer, created, modified, (text) => {
             resultText = text;
@@ -149,11 +139,10 @@ export class ClaudeRunner implements AIRunner {
         }
 
         if (code !== 0 && code !== null) {
-          reject(new Error(`Claude exited with code ${code}`));
+          reject(new Error(`Kiro exited with code ${code}`));
           return;
         }
 
-        // Deduplicate: files in both created and modified go to created only
         for (const f of created) {
           modified.delete(f);
         }
@@ -166,7 +155,7 @@ export class ClaudeRunner implements AIRunner {
       });
 
       child.on('error', (err) => {
-        reject(new Error(`Failed to spawn Claude CLI: ${err.message}`));
+        reject(new Error(`Failed to spawn Kiro CLI: ${err.message}`));
       });
     });
   }
@@ -184,7 +173,6 @@ export class ClaudeRunner implements AIRunner {
       return;
     }
 
-    // Result message — capture the final text
     if (msg.type === 'result') {
       if (msg.result) {
         onResult(msg.result);
@@ -196,7 +184,6 @@ export class ClaudeRunner implements AIRunner {
       return;
     }
 
-    // Assistant message — extract tool_use blocks for file tracking + display
     if (msg.type === 'assistant' && msg.message?.content) {
       for (const block of msg.message.content) {
         if (block.type === 'text' && block.text) {

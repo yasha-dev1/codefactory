@@ -1,11 +1,11 @@
 import type { DetectionResult } from '../core/detector.js';
-import type { ClaudeRunner } from '../core/claude-runner.js';
+import type { AIRunner, AIPlatform } from '../core/ai-runner.js';
 import type { FileWriter } from '../core/file-writer.js';
 
 export interface HarnessContext {
   repoRoot: string;
   detection: DetectionResult;
-  runner: ClaudeRunner;
+  runner: AIRunner;
   fileWriter: FileWriter;
   userPreferences: UserPreferences;
   previousOutputs: Map<string, HarnessOutput>;
@@ -13,6 +13,7 @@ export interface HarnessContext {
 
 export interface UserPreferences {
   ciProvider: 'github-actions' | 'gitlab-ci' | 'bitbucket';
+  aiPlatform: AIPlatform;
   strictnessLevel: 'relaxed' | 'standard' | 'strict';
   selectedHarnesses: string[];
   customCriticalPaths?: string[];

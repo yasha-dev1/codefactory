@@ -5,6 +5,7 @@ import { fileExists } from '../utils/fs.js';
 export interface HarnessConfig {
   version: string;
   repoRoot: string;
+  aiPlatform?: string;
   detection: {
     primaryLanguage: string;
     framework: string | null;
@@ -38,10 +39,7 @@ export async function loadHarnessConfig(repoRoot: string): Promise<HarnessConfig
   }
 }
 
-export async function saveHarnessConfig(
-  repoRoot: string,
-  config: HarnessConfig,
-): Promise<void> {
+export async function saveHarnessConfig(repoRoot: string, config: HarnessConfig): Promise<void> {
   const configPath = join(repoRoot, CONFIG_FILENAME);
   await mkdir(dirname(configPath), { recursive: true });
   config.lastUpdated = new Date().toISOString();
