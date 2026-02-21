@@ -1,10 +1,11 @@
-import { z } from 'zod';
 import { join } from 'node:path';
-import { fileExists, readFileIfExists, getDirectoryTree } from '../utils/fs.js';
-import type { ClaudeRunner } from './claude-runner.js';
+import { readdir } from 'node:fs/promises';
+import { fileExists, readFileIfExists } from '../utils/fs.js';
 
 export interface DetectionResult {
   primaryLanguage: string;
+  languages: string[];
+  hasTypeScript: boolean;
   framework: string | null;
   packageManager: string | null;
   testFramework: string | null;
@@ -24,54 +25,37 @@ export interface DetectionResult {
   criticalPaths: string[];
 }
 
-const detectionResultSchema = z.object({
-  primaryLanguage: z.string(),
-  framework: z.string().nullable(),
-  packageManager: z.string().nullable(),
-  testFramework: z.string().nullable(),
-  linter: z.string().nullable(),
-  formatter: z.string().nullable(),
-  typeChecker: z.string().nullable(),
-  buildTool: z.string().nullable(),
-  ciProvider: z.string().nullable(),
-  existingDocs: z.array(z.string()),
-  existingClaude: z.boolean(),
-  architecturalLayers: z.array(z.string()),
-  monorepo: z.boolean(),
-  testCommand: z.string().nullable(),
-  buildCommand: z.string().nullable(),
-  lintCommand: z.string().nullable(),
-  hasUIComponents: z.boolean(),
-  criticalPaths: z.array(z.string()),
-});
-
-export interface HeuristicResult {
-  languages: string[];
-  framework: string | null;
-  packageManager: string | null;
-  hasTypeScript: boolean;
-  ciProvider: string | null;
-  existingClaude: boolean;
-  existingDocs: string[];
-  monorepoIndicators: boolean;
-}
-
-export async function runHeuristicDetection(repoRoot: string): Promise<HeuristicResult> {
-  const result: HeuristicResult = {
+export async function runHeuristicDetection(repoRoot: string): Promise<DetectionResult> {
+  const result: DetectionResult = {
+    primaryLanguage: 'unknown',
     languages: [],
+    hasTypeScript: false,
     framework: null,
     packageManager: null,
-    hasTypeScript: false,
+    testFramework: null,
+    linter: null,
+    formatter: null,
+    typeChecker: null,
+    buildTool: null,
     ciProvider: null,
-    existingClaude: false,
     existingDocs: [],
-    monorepoIndicators: false,
+    existingClaude: false,
+    architecturalLayers: [],
+    monorepo: false,
+    testCommand: null,
+    buildCommand: null,
+    lintCommand: null,
+    hasUIComponents: false,
+    criticalPaths: [],
   };
 
-  // Node.js / JavaScript / TypeScript
+  const languages: string[] = [];
+  let hasTypeScript = false;
+
+  // ── Node.js / JavaScript / TypeScript ──────────────────────────────────
   const packageJsonPath = join(repoRoot, 'package.json');
   if (await fileExists(packageJsonPath)) {
-    result.languages.push('JavaScript');
+    languages.push('JavaScript');
     const raw = await readFileIfExists(packageJsonPath);
     if (raw) {
       try {
@@ -80,7 +64,10 @@ export async function runHeuristicDetection(repoRoot: string): Promise<Heuristic
           ...(pkg.dependencies as Record<string, string> | undefined),
           ...(pkg.devDependencies as Record<string, string> | undefined),
         };
+        const devDeps = (pkg.devDependencies as Record<string, string> | undefined) ?? {};
+        const scripts = (pkg.scripts as Record<string, string> | undefined) ?? {};
 
+        // Framework detection
         if (deps.next) result.framework = 'Next.js';
         else if (deps.react) result.framework = 'React';
         else if (deps.vue) result.framework = 'Vue';
@@ -90,6 +77,10 @@ export async function runHeuristicDetection(repoRoot: string): Promise<Heuristic
         else if (deps.fastify) result.framework = 'Fastify';
         else if (deps.nest || deps['@nestjs/core']) result.framework = 'NestJS';
 
+        // UI components detection
+        const uiFrameworks = ['react', 'vue', 'svelte', 'angular', '@angular/core', 'next'];
+        result.hasUIComponents = uiFrameworks.some((f) => f in deps);
+
         // Package manager detection
         if (await fileExists(join(repoRoot, 'pnpm-lock.yaml'))) result.packageManager = 'pnpm';
         else if (await fileExists(join(repoRoot, 'yarn.lock'))) result.packageManager = 'yarn';
@@ -97,9 +88,33 @@ export async function runHeuristicDetection(repoRoot: string): Promise<Heuristic
         else if (await fileExists(join(repoRoot, 'package-lock.json')))
           result.packageManager = 'npm';
 
+        // Test framework detection
+        if (devDeps.vitest || deps.vitest) result.testFramework = 'vitest';
+        else if (devDeps.jest || deps.jest) result.testFramework = 'jest';
+        else if (devDeps.mocha || deps.mocha) result.testFramework = 'mocha';
+
+        // Linter detection
+        if (devDeps.eslint || deps.eslint) result.linter = 'eslint';
+
+        // Formatter detection
+        if (devDeps.prettier || deps.prettier) result.formatter = 'prettier';
+        else if (devDeps['@biomejs/biome'] || deps['@biomejs/biome']) result.formatter = 'biome';
+
+        // Build tool detection
+        if (devDeps.tsup || deps.tsup) result.buildTool = 'tsup';
+        else if (devDeps.webpack || deps.webpack) result.buildTool = 'webpack';
+        else if (devDeps.vite || deps.vite) result.buildTool = 'vite';
+        else if (devDeps.esbuild || deps.esbuild) result.buildTool = 'esbuild';
+        else if (devDeps.rollup || deps.rollup) result.buildTool = 'rollup';
+
+        // Script-based command detection
+        if (scripts.test) result.testCommand = `${result.packageManager ?? 'npm'} test`;
+        if (scripts.build) result.buildCommand = `${result.packageManager ?? 'npm'} run build`;
+        if (scripts.lint) result.lintCommand = `${result.packageManager ?? 'npm'} run lint`;
+
         // Monorepo indicators
         if (pkg.workspaces || (await fileExists(join(repoRoot, 'pnpm-workspace.yaml')))) {
-          result.monorepoIndicators = true;
+          result.monorepo = true;
         }
       } catch {
         // ignore parse errors
@@ -109,40 +124,73 @@ export async function runHeuristicDetection(repoRoot: string): Promise<Heuristic
 
   // TypeScript
   if (await fileExists(join(repoRoot, 'tsconfig.json'))) {
-    result.hasTypeScript = true;
-    if (!result.languages.includes('TypeScript')) {
-      result.languages.push('TypeScript');
+    hasTypeScript = true;
+    result.typeChecker = 'tsc';
+    if (!languages.includes('TypeScript')) {
+      languages.push('TypeScript');
     }
   }
 
-  // Python
+  // ── Python ─────────────────────────────────────────────────────────────
+  const hasPyproject = await fileExists(join(repoRoot, 'pyproject.toml'));
   if (
-    (await fileExists(join(repoRoot, 'pyproject.toml'))) ||
+    hasPyproject ||
     (await fileExists(join(repoRoot, 'setup.py'))) ||
     (await fileExists(join(repoRoot, 'requirements.txt')))
   ) {
-    result.languages.push('Python');
-    if (await fileExists(join(repoRoot, 'pyproject.toml'))) {
+    languages.push('Python');
+
+    if (hasPyproject) {
       const raw = await readFileIfExists(join(repoRoot, 'pyproject.toml'));
       if (raw) {
+        // Framework
         if (raw.includes('django')) result.framework = 'Django';
         else if (raw.includes('fastapi')) result.framework = 'FastAPI';
         else if (raw.includes('flask')) result.framework = 'Flask';
+
+        // Test framework
+        if (raw.includes('pytest')) result.testFramework = 'pytest';
+
+        // Linter
+        if (raw.includes('ruff')) result.linter = 'ruff';
+        else if (raw.includes('flake8')) result.linter = 'flake8';
+
+        // Formatter
+        if (raw.includes('black')) result.formatter = 'black';
+        else if (raw.includes('ruff')) result.formatter = result.formatter ?? 'ruff';
+
+        // Type checker
+        if (raw.includes('mypy')) result.typeChecker = 'mypy';
+        else if (raw.includes('pyright')) result.typeChecker = 'pyright';
       }
+    }
+
+    // Python commands (heuristic)
+    if (!result.testCommand && result.testFramework === 'pytest') {
+      result.testCommand = 'pytest';
+    }
+    if (!result.lintCommand && result.linter === 'ruff') {
+      result.lintCommand = 'ruff check .';
     }
   }
 
-  // Go
+  // ── Go ─────────────────────────────────────────────────────────────────
   if (await fileExists(join(repoRoot, 'go.mod'))) {
-    result.languages.push('Go');
+    languages.push('Go');
+    if (!result.testCommand) result.testCommand = 'go test ./...';
+    if (!result.buildCommand) result.buildCommand = 'go build ./...';
+    if (!result.lintCommand) result.lintCommand = 'golangci-lint run';
   }
 
-  // Rust
+  // ── Rust ───────────────────────────────────────────────────────────────
   if (await fileExists(join(repoRoot, 'Cargo.toml'))) {
-    result.languages.push('Rust');
+    languages.push('Rust');
+    if (!result.testCommand) result.testCommand = 'cargo test';
+    if (!result.buildCommand) result.buildCommand = 'cargo build';
+    if (!result.lintCommand) result.lintCommand = 'cargo clippy';
   }
 
-  // CI detection
+  // ── CI detection ───────────────────────────────────────────────────────
   if (await fileExists(join(repoRoot, '.github'))) {
     result.ciProvider = 'GitHub Actions';
   }
@@ -156,12 +204,12 @@ export async function runHeuristicDetection(repoRoot: string): Promise<Heuristic
     result.ciProvider = 'CircleCI';
   }
 
-  // Existing CLAUDE.md
+  // ── Existing CLAUDE.md ─────────────────────────────────────────────────
   if (await fileExists(join(repoRoot, 'CLAUDE.md'))) {
     result.existingClaude = true;
   }
 
-  // Existing docs
+  // ── Existing docs ──────────────────────────────────────────────────────
   const docPaths = ['README.md', 'CONTRIBUTING.md', 'docs', 'CHANGELOG.md', 'ARCHITECTURE.md'];
   for (const docPath of docPaths) {
     if (await fileExists(join(repoRoot, docPath))) {
@@ -169,40 +217,59 @@ export async function runHeuristicDetection(repoRoot: string): Promise<Heuristic
     }
   }
 
+  // ── Architectural layers ───────────────────────────────────────────────
+  const srcDir = join(repoRoot, 'src');
+  if (await fileExists(srcDir)) {
+    try {
+      const entries = await readdir(srcDir, { withFileTypes: true });
+      result.architecturalLayers = entries
+        .filter((e) => e.isDirectory())
+        .map((e) => e.name)
+        .filter((name) => !name.startsWith('.') && !name.startsWith('__'));
+    } catch {
+      // ignore read errors
+    }
+  }
+
+  // ── Critical paths ─────────────────────────────────────────────────────
+  const criticalCandidates = [
+    'src/index.ts',
+    'src/main.ts',
+    'src/app.ts',
+    'src/server.ts',
+    'src/cli.ts',
+    'src/index.js',
+    'src/main.js',
+    'src/app.js',
+    'src/server.js',
+    'main.go',
+    'cmd/main.go',
+    'src/main.rs',
+    'src/lib.rs',
+    'package.json',
+    'tsconfig.json',
+    'tsup.config.ts',
+    'vitest.config.ts',
+    'vite.config.ts',
+    'webpack.config.js',
+    'eslint.config.js',
+    '.eslintrc.js',
+    '.eslintrc.json',
+    'pyproject.toml',
+    'Cargo.toml',
+    'go.mod',
+  ];
+
+  for (const candidate of criticalCandidates) {
+    if (await fileExists(join(repoRoot, candidate))) {
+      result.criticalPaths.push(candidate);
+    }
+  }
+
+  // Set language fields
+  result.languages = languages;
+  result.hasTypeScript = hasTypeScript;
+  result.primaryLanguage = hasTypeScript ? 'TypeScript' : (languages[0] ?? 'unknown');
+
   return result;
-}
-
-export async function runFullDetection(
-  repoRoot: string,
-  runner: ClaudeRunner,
-): Promise<DetectionResult> {
-  const heuristics = await runHeuristicDetection(repoRoot);
-  const tree = await getDirectoryTree(repoRoot, { maxDepth: 3 });
-
-  const prompt = `Analyze this repository and provide a complete detection result.
-
-## Heuristic Detection Results
-${JSON.stringify(heuristics, null, 2)}
-
-## Directory Tree
-${tree}
-
-## Repository Root
-${repoRoot}
-
-Examine the repository files to determine:
-1. Primary language and framework
-2. Package manager, build tool, test framework, linter, formatter, type checker
-3. CI/CD provider
-4. Existing documentation files
-5. Whether CLAUDE.md exists
-6. Architectural layers (e.g., "api", "database", "frontend", "services")
-7. Whether this is a monorepo
-8. Commands for test, build, lint
-9. Whether the project has UI components
-10. Critical file paths (entry points, config files, core business logic)
-
-Return a JSON object matching the DetectionResult schema.`;
-
-  return runner.analyze<DetectionResult>(prompt, detectionResultSchema);
 }

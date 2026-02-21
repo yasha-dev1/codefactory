@@ -72,15 +72,19 @@ describe('claudeMdHarness', () => {
     expect(claudeMdHarness.isApplicable(ctx)).toBe(true);
   });
 
-  it('should call runner.generate with the prompt', async () => {
+  it('should call runner.generate with the prompt including reference', async () => {
     const ctx = createMockContext();
     await claudeMdHarness.execute(ctx);
 
     expect(ctx.runner.generate).toHaveBeenCalledOnce();
     expect(ctx.runner.generate).toHaveBeenCalledWith(
-      'mocked claude-md prompt',
+      expect.stringContaining('mocked claude-md prompt'),
       'mocked system prompt',
     );
+    // Verify the reference implementation section is included
+    const actualPrompt = vi.mocked(ctx.runner.generate).mock.calls[0][0];
+    expect(actualPrompt).toContain('## Reference Implementation');
+    expect(actualPrompt).toContain('### Reference: CLAUDE.md');
   });
 
   it('should include CLAUDE.md in filesCreated', async () => {
@@ -102,10 +106,7 @@ describe('claudeMdHarness', () => {
 
     await claudeMdHarness.execute(ctx);
 
-    expect(buildClaudeMdPrompt).toHaveBeenCalledWith(
-      ctx.detection,
-      ctx.userPreferences,
-    );
+    expect(buildClaudeMdPrompt).toHaveBeenCalledWith(ctx.detection, ctx.userPreferences);
   });
 
   it('should store output in previousOutputs map', async () => {

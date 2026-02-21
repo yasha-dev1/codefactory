@@ -1,6 +1,16 @@
 import { writeFile, appendFile, mkdir, access } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
+export interface FileWriterSnapshot {
+  created: Set<string>;
+  modified: Set<string>;
+}
+
+export interface FileWriterDiff {
+  created: string[];
+  modified: string[];
+}
+
 export class FileWriter {
   private created: Set<string> = new Set();
   private modified: Set<string> = new Set();
@@ -27,6 +37,19 @@ export class FileWriter {
     } else {
       this.created.add(filePath);
     }
+  }
+
+  snapshot(): FileWriterSnapshot {
+    return {
+      created: new Set(this.created),
+      modified: new Set(this.modified),
+    };
+  }
+
+  diffSince(snap: FileWriterSnapshot): FileWriterDiff {
+    const created = [...this.created].filter((f) => !snap.created.has(f));
+    const modified = [...this.modified].filter((f) => !snap.modified.has(f));
+    return { created, modified };
   }
 
   getCreatedFiles(): string[] {

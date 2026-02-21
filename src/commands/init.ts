@@ -1,5 +1,6 @@
+import { readFile, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
-import { exec } from 'node:child_process';
+import { exec, execSync } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { logger } from '../ui/logger.js';
@@ -10,12 +11,16 @@ import { readFileIfExists } from '../utils/fs.js';
 import { NotAGitRepoError } from '../utils/errors.js';
 import { ClaudeRunner } from '../core/claude-runner.js';
 import { FileWriter } from '../core/file-writer.js';
-import { loadHarnessConfig, saveHarnessConfig } from '../core/config.js';
-import type { HarnessConfig } from '../core/config.js';
-import { runHeuristicDetection, runFullDetection } from '../core/detector.js';
-import type { DetectionResult, HeuristicResult } from '../core/detector.js';
+import { loadHarnessConfig } from '../core/config.js';
+import { runHeuristicDetection } from '../core/detector.js';
+import type { DetectionResult } from '../core/detector.js';
 import { getHarnessModules } from '../harnesses/index.js';
-import type { HarnessContext, HarnessOutput, UserPreferences } from '../harnesses/types.js';
+import type {
+  HarnessContext,
+  HarnessModule,
+  HarnessOutput,
+  UserPreferences,
+} from '../harnesses/types.js';
 
 const execAsync = promisify(exec);
 
@@ -27,21 +32,19 @@ export interface InitOptions {
 // Mapping from harness name to npm script entries
 const HARNESS_SCRIPTS: Record<string, Record<string, string>> = {
   'risk-policy-gate': {
-    'harness:risk-tier': 'npx ts-node scripts/risk-policy-gate.ts',
+    'harness:risk-tier': 'npx tsx scripts/risk-policy-gate.ts',
   },
   'risk-contract': {
-    'harness:smoke': 'npx ts-node scripts/harness-smoke.ts',
+    'harness:smoke': 'npx tsx scripts/harness-smoke.ts',
   },
   'browser-evidence': {
-    'harness:ui:capture-browser-evidence':
-      'npx ts-node scripts/harness-ui-capture-browser-evidence.ts',
-    'harness:ui:verify-browser-evidence':
-      'npx ts-node scripts/harness-ui-verify-browser-evidence.ts',
+    'harness:ui:capture-browser-evidence': 'npx tsx scripts/harness-ui-capture-browser-evidence.ts',
+    'harness:ui:verify-browser-evidence': 'npx tsx scripts/harness-ui-verify-browser-evidence.ts',
     'harness:ui:pre-pr':
       'npm run harness:ui:capture-browser-evidence && npm run harness:ui:verify-browser-evidence',
   },
   'garbage-collection': {
-    'harness:weekly-metrics': 'npx ts-node scripts/harness-weekly-metrics.ts',
+    'harness:weekly-metrics': 'npx tsx scripts/harness-weekly-metrics.ts',
   },
 };
 
@@ -74,27 +77,16 @@ export async function initCommand(options: InitOptions): Promise<void> {
   }
 
   // ── 2. Detection phase ───────────────────────────────────────────────
-  const heuristics = await withSpinner('Running heuristic analysis...', () =>
+  const detection = await withSpinner('Analyzing repository...', () =>
     runHeuristicDetection(repoRoot),
   );
-
-  let detection: DetectionResult;
-
-  if (!options.skipDetection) {
-    const runner = new ClaudeRunner({ cwd: repoRoot });
-    detection = await withSpinner('Analyzing repository with Claude (deep detection)...', () =>
-      runFullDetection(repoRoot, runner),
-    );
-  } else {
-    detection = heuristicToDetectionResult(heuristics);
-  }
 
   // ── 3. User preferences ──────────────────────────────────────────────
   displayDetectionSummary(detection);
 
   const detectionOk = await confirmPrompt('Does this detection look correct?', true);
   if (!detectionOk) {
-    detection = await correctDetection(detection);
+    await correctDetection(detection);
   }
 
   const ciProvider = await selectPrompt<UserPreferences['ciProvider']>(
@@ -136,10 +128,11 @@ export async function initCommand(options: InitOptions): Promise<void> {
   }
 
   // Build harness selection list
+  const tempRunner = new ClaudeRunner({ cwd: repoRoot });
   const tempCtx: HarnessContext = {
     repoRoot,
     detection,
-    runner: new ClaudeRunner({ cwd: repoRoot }),
+    runner: tempRunner,
     fileWriter: new FileWriter(),
     userPreferences: {
       ciProvider,
@@ -208,7 +201,10 @@ export async function initCommand(options: InitOptions): Promise<void> {
     return;
   }
 
-  // ── 4. Harness execution ─────────────────────────────────────────────
+  // ── 4. Ensure GitHub labels ──────────────────────────────────────────
+  await ensureGitHubLabels(repoRoot, ciProvider);
+
+  // ── 5. Harness execution ─────────────────────────────────────────────
   const runner = new ClaudeRunner({ cwd: repoRoot });
   const fileWriter = new FileWriter();
   const previousOutputs = new Map<string, HarnessOutput>();
@@ -225,34 +221,58 @@ export async function initCommand(options: InitOptions): Promise<void> {
   console.log();
   logger.header('Generating harness artifacts');
 
-  const selectedModules = allHarnesses.filter((h) => selectedHarnesses.includes(h.name));
+  const applicableHarnesses = allHarnesses.filter((h) => selectedHarnesses.includes(h.name));
 
-  for (const harness of selectedModules) {
-    try {
-      const output = await withSpinner(`Generating ${harness.displayName}...`, () =>
-        harness.execute(ctx),
-      );
+  const batches = [
+    ['risk-contract', 'claude-md', 'docs-structure', 'pre-commit-hooks'],
+    ['risk-policy-gate', 'ci-pipeline', 'review-agent', 'remediation-loop'],
+    ['browser-evidence', 'pr-templates', 'architectural-linters', 'garbage-collection'],
+    ['incident-harness-loop', 'issue-triage', 'issue-planner', 'issue-implementer'],
+  ];
 
-      previousOutputs.set(harness.name, output);
+  for (const batch of batches) {
+    const harnessesInBatch = batch
+      .map((name) => applicableHarnesses.find((h) => h.name === name))
+      .filter((h): h is HarnessModule => h != null);
 
-      for (const f of output.filesCreated) {
-        logger.fileCreated(relative(repoRoot, f));
+    if (harnessesInBatch.length === 0) continue;
+
+    const results = await Promise.allSettled(harnessesInBatch.map((h) => h.execute(ctx)));
+
+    for (const [i, result] of results.entries()) {
+      if (result.status === 'fulfilled') {
+        const output = result.value;
+        previousOutputs.set(harnessesInBatch[i].name, output);
+
+        for (const f of output.filesCreated) {
+          logger.fileCreated(relative(repoRoot, f));
+        }
+        for (const f of output.filesModified) {
+          logger.fileModified(relative(repoRoot, f));
+        }
+      } else {
+        logger.warn(`Harness ${harnessesInBatch[i].name} failed: ${result.reason}`);
       }
-      for (const f of output.filesModified) {
-        logger.fileModified(relative(repoRoot, f));
-      }
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      logger.warn(`Harness "${harness.displayName}" failed: ${msg}`);
-      logger.dim('  Continuing with remaining harnesses...');
     }
   }
 
-  // ── 5. Add npm scripts to target repo's package.json ─────────────────
+  // ── 6. Add npm scripts to target repo's package.json ─────────────────
   await addHarnessScripts(repoRoot, selectedHarnesses, fileWriter);
 
-  // ── 6. Save harness config ───────────────────────────────────────────
-  const config: HarnessConfig = {
+  // ── 7. Save harness config (merge with Claude-generated config) ─────
+  // The risk-contract harness writes harness.config.json with riskTiers,
+  // commands, shaDiscipline, architecturalBoundaries, etc. We merge the
+  // harness registry into that config rather than overwriting it.
+  const configPath = join(repoRoot, 'harness.config.json');
+  let claudeConfig: Record<string, unknown> = {};
+  try {
+    const raw = await readFile(configPath, 'utf-8');
+    claudeConfig = JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    // No existing config from risk-contract harness, start fresh
+  }
+
+  const harnessRegistry = {
     version: '1.0.0',
     repoRoot,
     detection: {
@@ -262,7 +282,7 @@ export async function initCommand(options: InitOptions): Promise<void> {
       ciProvider: detection.ciProvider,
       monorepo: detection.monorepo,
     },
-    harnesses: selectedModules.map((h) => {
+    harnesses: applicableHarnesses.map((h) => {
       const output = previousOutputs.get(h.name);
       return {
         name: h.name,
@@ -271,19 +291,26 @@ export async function initCommand(options: InitOptions): Promise<void> {
         files: output ? [...output.filesCreated, ...output.filesModified] : [],
       };
     }),
-    generatedAt: new Date().toISOString(),
+    generatedAt: claudeConfig.generatedAt ?? new Date().toISOString(),
     lastUpdated: new Date().toISOString(),
   };
 
-  await saveHarnessConfig(repoRoot, config);
+  // Merge: Claude's config (riskTiers, commands, etc.) is the base,
+  // harness registry fields are added/overwritten on top
+  const mergedConfig = { ...claudeConfig, ...harnessRegistry };
+  await writeFile(configPath, JSON.stringify(mergedConfig, null, 2) + '\n', 'utf-8');
   logger.fileCreated('harness.config.json');
 
-  // ── 7. Summary ───────────────────────────────────────────────────────
+  // ── 8. Summary ───────────────────────────────────────────────────────
   console.log();
   logger.header('Summary');
 
-  const allCreated = fileWriter.getCreatedFiles();
-  const allModified = fileWriter.getModifiedFiles();
+  const allCreated: string[] = [];
+  const allModified: string[] = [];
+  for (const output of previousOutputs.values()) {
+    allCreated.push(...output.filesCreated);
+    allModified.push(...output.filesModified);
+  }
 
   if (allCreated.length > 0) {
     logger.success(`Files created (${allCreated.length}):`);
@@ -357,27 +384,34 @@ export async function initCommand(options: InitOptions): Promise<void> {
 
 // ── Helper functions ──────────────────────────────────────────────────────
 
-function heuristicToDetectionResult(h: HeuristicResult): DetectionResult {
-  return {
-    primaryLanguage: h.languages[0] ?? 'unknown',
-    framework: h.framework,
-    packageManager: h.packageManager,
-    testFramework: null,
-    linter: null,
-    formatter: null,
-    typeChecker: h.hasTypeScript ? 'TypeScript' : null,
-    buildTool: null,
-    ciProvider: h.ciProvider,
-    existingDocs: h.existingDocs,
-    existingClaude: h.existingClaude,
-    architecturalLayers: [],
-    monorepo: h.monorepoIndicators,
-    testCommand: null,
-    buildCommand: null,
-    lintCommand: null,
-    hasUIComponents: false,
-    criticalPaths: [],
-  };
+const GITHUB_LABELS: { name: string; color: string; description: string }[] = [
+  { name: 'agent:plan', color: '0E8A16', description: 'Triggers the planner agent' },
+  { name: 'agent:implement', color: '1D76DB', description: 'Triggers the implementer agent' },
+  { name: 'agent:needs-judgment', color: 'D93F0B', description: 'Requires human judgment' },
+  { name: 'agent-pr', color: 'BFD4F2', description: 'PR created by an agent' },
+  { name: 'review-fix-cycle-1', color: 'FBCA04', description: 'First review-fix cycle' },
+  { name: 'review-fix-cycle-2', color: 'FBCA04', description: 'Second review-fix cycle' },
+  { name: 'review-fix-cycle-3', color: 'FBCA04', description: 'Third review-fix cycle' },
+  { name: 'needs-more-info', color: 'D4C5F9', description: 'Needs additional information' },
+  { name: 'triage:failed', color: 'B60205', description: 'Triage failed' },
+  { name: 'needs-human-review', color: 'E99695', description: 'Needs human review' },
+];
+
+async function ensureGitHubLabels(repoRoot: string, ciProvider: string): Promise<void> {
+  if (ciProvider !== 'github-actions') return;
+
+  logger.info('Ensuring GitHub labels exist...');
+  for (const label of GITHUB_LABELS) {
+    try {
+      execSync(
+        `gh label create "${label.name}" --color "${label.color}" --description "${label.description}" --force`,
+        { cwd: repoRoot, stdio: 'ignore' },
+      );
+    } catch {
+      // Label creation may fail if gh CLI is not available or not authenticated — non-fatal
+    }
+  }
+  logger.dim('  GitHub labels checked.');
 }
 
 function displayDetectionSummary(d: DetectionResult): void {
@@ -395,6 +429,12 @@ function displayDetectionSummary(d: DetectionResult): void {
   logger.dim(`  Monorepo:        ${d.monorepo ? 'yes' : 'no'}`);
   logger.dim(`  UI components:   ${d.hasUIComponents ? 'yes' : 'no'}`);
   if (d.existingClaude) logger.dim('  Existing CLAUDE.md detected');
+  if (d.architecturalLayers.length > 0) {
+    logger.dim(`  Layers:          ${d.architecturalLayers.join(', ')}`);
+  }
+  if (d.criticalPaths.length > 0) {
+    logger.dim(`  Critical paths:  ${d.criticalPaths.length} detected`);
+  }
   console.log();
 }
 

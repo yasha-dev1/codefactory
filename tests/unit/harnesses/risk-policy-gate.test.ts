@@ -73,24 +73,28 @@ describe('riskPolicyGateHarness', () => {
     expect(riskPolicyGateHarness.isApplicable(ctx)).toBe(true);
   });
 
-  it('should call runner.generate with the prompt', async () => {
+  it('should call runner.generate with the prompt including reference', async () => {
     const ctx = createMockContext();
     await riskPolicyGateHarness.execute(ctx);
 
     expect(ctx.runner.generate).toHaveBeenCalledOnce();
     expect(ctx.runner.generate).toHaveBeenCalledWith(
-      'mocked risk-policy-gate prompt',
+      expect.stringContaining('mocked risk-policy-gate prompt'),
       'mocked system prompt',
     );
+    // Verify the reference implementation section is included
+    const actualPrompt = vi.mocked(ctx.runner.generate).mock.calls[0][0];
+    expect(actualPrompt).toContain('## Reference Implementation');
+    expect(actualPrompt).toContain('### Reference: scripts/risk-policy-gate.sh');
+    expect(actualPrompt).toContain('### Reference: scripts/risk-policy-gate.ts');
+    expect(actualPrompt).toContain('### Reference: .github/workflows/risk-policy-gate.yml');
   });
 
   it('should include workflow file in filesCreated', async () => {
     const ctx = createMockContext();
     const output = await riskPolicyGateHarness.execute(ctx);
 
-    expect(output.filesCreated).toContain(
-      '/tmp/test-repo/.github/workflows/risk-policy-gate.yml',
-    );
+    expect(output.filesCreated).toContain('/tmp/test-repo/.github/workflows/risk-policy-gate.yml');
   });
 
   it('should include script file in filesCreated', async () => {
@@ -100,13 +104,12 @@ describe('riskPolicyGateHarness', () => {
     expect(output.filesCreated).toContain('/tmp/test-repo/scripts/risk-policy-gate.ts');
   });
 
-  it('should include metadata with workflowPath and scriptPath', async () => {
+  it('should include metadata with gatePath', async () => {
     const ctx = createMockContext();
     const output = await riskPolicyGateHarness.execute(ctx);
 
     expect(output.metadata).toBeDefined();
-    expect(output.metadata?.workflowPath).toBe('.github/workflows/risk-policy-gate.yml');
-    expect(output.metadata?.scriptPath).toBe('scripts/risk-policy-gate.ts');
+    expect(output.metadata?.gatePath).toBe('scripts/risk-policy-gate.sh');
   });
 
   it('should store output in previousOutputs map', async () => {

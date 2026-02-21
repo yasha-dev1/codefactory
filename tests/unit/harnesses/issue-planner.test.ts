@@ -73,15 +73,18 @@ describe('issuePlannerHarness', () => {
     expect(issuePlannerHarness.isApplicable(ctx)).toBe(true);
   });
 
-  it('should call runner.generate with the prompt', async () => {
+  it('should call runner.generate with the prompt containing reference content', async () => {
     const ctx = createMockContext();
     await issuePlannerHarness.execute(ctx);
 
     expect(ctx.runner.generate).toHaveBeenCalledOnce();
-    expect(ctx.runner.generate).toHaveBeenCalledWith(
-      'mocked issue planner prompt',
-      'mocked system prompt',
-    );
+    const [prompt, systemPrompt] = (ctx.runner.generate as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(prompt).toContain('mocked issue planner prompt');
+    expect(prompt).toContain('## Reference Implementation');
+    expect(prompt).toContain('### Reference: .github/workflows/issue-planner.yml');
+    expect(prompt).toContain('### Reference: scripts/issue-planner-guard.ts');
+    expect(prompt).toContain('### Reference: .codefactory/prompts/issue-planner.md');
+    expect(systemPrompt).toBe('mocked system prompt');
   });
 
   it('should return correct output with filesCreated', async () => {
@@ -102,16 +105,12 @@ describe('issuePlannerHarness', () => {
     expect(stored?.harnessName).toBe('issue-planner');
   });
 
-  it('should include metadata with targetFiles', async () => {
+  it('should include metadata with workflowPath', async () => {
     const ctx = createMockContext();
     const output = await issuePlannerHarness.execute(ctx);
 
     expect(output.metadata).toBeDefined();
-    expect(output.metadata?.targetFiles).toEqual([
-      '.github/workflows/issue-planner.yml',
-      'scripts/issue-planner-guard.ts',
-    ]);
-    expect(output.metadata?.promptFile).toBe('.codefactory/prompts/issue-planner.md');
+    expect(output.metadata?.workflowPath).toBe('.github/workflows/issue-planner.yml');
   });
 
   it('should wrap errors with descriptive message', async () => {

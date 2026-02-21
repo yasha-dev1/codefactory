@@ -128,7 +128,7 @@ Validates the harness engineering setup itself:
 
 ## CI Best Practices to Follow
 
-- Pin action versions to full SHA hashes (for GitHub Actions) for security
+- **SHA-Pinned Actions (MANDATORY)**: ALL GitHub Actions MUST be pinned to exact commit SHAs, not version tags. Example: \`actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683\` (v4.2.2), \`actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af\` (v4.1.0). Never use \`@v4\` — tags can be moved.
 - Use \`concurrency\` groups to cancel outdated runs on the same PR
 - Set appropriate \`timeout-minutes\` for each job (10 min for lint, 20 for tests, 30 for builds)
 - Use minimal permissions: \`contents: read\` by default, \`pull-requests: write\` only where needed
@@ -136,6 +136,9 @@ Validates the harness engineering setup itself:
 - ${cacheStrategy}
 - Upload test results and coverage as artifacts
 - For monorepo (${detection.monorepo}): use path filters to only run relevant jobs
+- **Node Version**: Use Node.js 22 consistently across all jobs
+- **TypeScript Execution**: Use \`npx tsx\` to run TypeScript scripts, NOT \`npx ts-node\` (this project uses ESM)
+- **Structural Tests**: The structural-tests job must run \`bash scripts/structural-tests.sh\`, NOT \`npm test\` — it validates architectural boundaries, not unit tests
 
 ## Claude Code Integration (IMPORTANT)
 
@@ -159,7 +162,14 @@ steps:
 
 Never reference \`ANTHROPIC_API_KEY\` or invoke the \`claude\` CLI directly with API key authentication. Always use the action with \`claude_code_oauth_token\`.
 
-## Output Format
+## Required Output Files (ALL mandatory)
 
-Return the complete file contents for each workflow file. Separate each file with a comment line indicating the target file path. The files must be valid YAML that the CI provider can parse without errors. Do not wrap in markdown code fences.`;
+You MUST generate ALL of the following files. Do not skip any:
+
+1. \`.github/workflows/ci.yml\` — Main CI pipeline workflow
+2. \`.github/workflows/structural-tests.yml\` — Structural tests workflow
+3. \`.github/workflows/harness-smoke.yml\` — Harness smoke tests workflow
+4. \`scripts/structural-tests.sh\` — Shell script for architectural boundary validation (make executable)
+
+Write each file using the Write tool. The files must be valid YAML/shell that can be parsed without errors.`;
 }

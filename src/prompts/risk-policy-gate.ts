@@ -3,14 +3,18 @@ import type { DetectionResult, UserPreferences } from './types.js';
 /**
  * Prompt for generating the risk-policy-gate preflight workflow and script.
  */
-export function buildRiskPolicyGatePrompt(detection: DetectionResult, prefs: UserPreferences): string {
-  const criticalPaths = [
-    ...detection.criticalPaths,
-    ...(prefs.customCriticalPaths ?? []),
-  ];
+export function buildRiskPolicyGatePrompt(
+  detection: DetectionResult,
+  prefs: UserPreferences,
+): string {
+  const criticalPaths = [...detection.criticalPaths, ...(prefs.customCriticalPaths ?? [])];
 
-  const scriptRuntime = detection.primaryLanguage === 'python' ? 'Python' :
-    detection.primaryLanguage === 'go' ? 'Go' : 'Node.js (with TypeScript or plain JS)';
+  const scriptRuntime =
+    detection.primaryLanguage === 'python'
+      ? 'Python'
+      : detection.primaryLanguage === 'go'
+        ? 'Go'
+        : 'Node.js (with TypeScript or plain JS)';
 
   return `Generate the risk-policy-gate preflight system. This is the most critical piece of the harness — it runs before all other CI checks and determines what level of scrutiny a PR requires.
 
@@ -25,7 +29,7 @@ export function buildRiskPolicyGatePrompt(detection: DetectionResult, prefs: Use
 
 ## Critical Paths
 
-${criticalPaths.map(p => `- \`${p}\``).join('\n') || '- none configured'}
+${criticalPaths.map((p) => `- \`${p}\``).join('\n') || '- none configured'}
 
 ## Generate These Files
 
@@ -39,9 +43,13 @@ A script (preferably shell for portability, with a ${scriptRuntime} alternative 
 - If there's a mismatch, fail immediately with an error explaining SHA discipline
 - Store the verified SHA for use by downstream jobs
 - For ${prefs.ciProvider}:
-${prefs.ciProvider === 'github-actions' ? '  - Use `${{ github.event.pull_request.head.sha }}` and compare with `git rev-parse HEAD`' :
-  prefs.ciProvider === 'gitlab-ci' ? '  - Use `$CI_COMMIT_SHA` and compare with `git rev-parse HEAD`' :
-  '  - Use `$BITBUCKET_COMMIT` and compare with `git rev-parse HEAD`'}
+${
+  prefs.ciProvider === 'github-actions'
+    ? '  - Use `${{ github.event.pull_request.head.sha }}` and compare with `git rev-parse HEAD`'
+    : prefs.ciProvider === 'gitlab-ci'
+      ? '  - Use `$CI_COMMIT_SHA` and compare with `git rev-parse HEAD`'
+      : '  - Use `$BITBUCKET_COMMIT` and compare with `git rev-parse HEAD`'
+}
 
 #### Step 2: Changed File Classification
 - Get the list of changed files in the PR using \`git diff --name-only\` against the base branch
@@ -50,7 +58,7 @@ ${prefs.ciProvider === 'github-actions' ? '  - Use `${{ github.event.pull_reques
 - Tier classification rules:
   - **Tier 1**: Documentation files (*.md, *.txt, docs/*, LICENSE, .gitignore, comments-only changes)
   - **Tier 2**: Source code, test files, non-critical configuration
-  - **Tier 3**: Files matching critical paths: ${criticalPaths.map(p => `\`${p}\``).join(', ') || 'none'}
+  - **Tier 3**: Files matching critical paths: ${criticalPaths.map((p) => `\`${p}\``).join(', ') || 'none'}
   - **Tier 3 also**: CI/CD configs, security configs, dependency files (package.json, lock files) if strictness is "strict"
 
 #### Step 3: Required Checks Computation
@@ -102,9 +110,13 @@ Output a JSON object with:
 \`\`\`
 
 For ${prefs.ciProvider}:
-${prefs.ciProvider === 'github-actions' ? '- Set outputs using `echo "tier=$TIER" >> $GITHUB_OUTPUT`\n- Set outputs using `echo "required-checks=$CHECKS_JSON" >> $GITHUB_OUTPUT`' :
-  prefs.ciProvider === 'gitlab-ci' ? '- Write outputs to a dotenv artifact file for downstream jobs' :
-  '- Write outputs to a shared artifact file'}
+${
+  prefs.ciProvider === 'github-actions'
+    ? '- Set outputs using `echo "tier=$TIER" >> $GITHUB_OUTPUT`\n- Set outputs using `echo "required-checks=$CHECKS_JSON" >> $GITHUB_OUTPUT`'
+    : prefs.ciProvider === 'gitlab-ci'
+      ? '- Write outputs to a dotenv artifact file for downstream jobs'
+      : '- Write outputs to a shared artifact file'
+}
 
 ### 2. Risk Policy Gate Workflow
 
@@ -134,7 +146,14 @@ A small utility function (in the gate script or separate file) that:
 - The script should complete in under 10 seconds
 - Include inline comments explaining each step
 
+## Workflow Quality Requirements (IMPORTANT)
+
+- **SHA-Pinned Actions**: All GitHub Actions MUST be pinned to exact commit SHAs, not version tags. Example: use \`actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683\` instead of \`actions/checkout@v4\`. This is a security requirement — version tags can be moved to point at different commits.
+- **Node Version Consistency**: Use the same Node.js version (22) across all jobs and workflows for consistency with the main CI pipeline.
+- **Structural Tests Job**: If a structural-tests job exists in the workflow, it MUST run \`bash scripts/structural-tests.sh\`, NOT \`npm test\`. The structural tests validate architectural boundaries, which is different from the unit test suite.
+- **TypeScript Execution**: Use \`npx tsx\` to run TypeScript scripts, NOT \`npx ts-node\`. This project uses ESM (\`"type": "module"\`) and ts-node does not support ESM well.
+
 ## Output Format
 
-Return the complete file contents for each file, separated by a comment line with the target file path. Files must be immediately executable/parseable. Do not wrap in markdown code fences.`;
+Write each file using the Write tool. Files must be immediately executable/parseable.`;
 }

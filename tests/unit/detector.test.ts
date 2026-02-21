@@ -39,7 +39,7 @@ describe('runHeuristicDetection', () => {
 
     it('should not detect monorepo indicators', async () => {
       const result = await runHeuristicDetection(nodeProjectDir);
-      expect(result.monorepoIndicators).toBe(false);
+      expect(result.monorepo).toBe(false);
     });
   });
 
@@ -102,7 +102,7 @@ describe('runHeuristicDetection', () => {
       expect(result.ciProvider).toBeNull();
       expect(result.existingClaude).toBe(false);
       expect(result.existingDocs).toEqual([]);
-      expect(result.monorepoIndicators).toBe(false);
+      expect(result.monorepo).toBe(false);
     });
   });
 });
