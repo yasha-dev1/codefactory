@@ -33,7 +33,7 @@ A CI workflow triggered on pull_request events (opened, synchronize). It must:
 - Post a structured review comment on the PR
 - Report a check run status (success/failure/neutral) tied to the head SHA
 
-**Permissions**: contents: read, pull-requests: write, checks: write, issues: read, id-token: write
+**Permissions**: contents: read, pull-requests: write, checks: write, issues: write, actions: write, id-token: write
 
 **SHA Deduplication**: Before running the full review, check if this SHA was already reviewed:
 - Search PR comments for the marker \`<!-- harness-review: <head-sha> -->\`
