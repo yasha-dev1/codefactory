@@ -49,11 +49,22 @@ export function snapshotUntrackedFiles(cwd: string): Set<string> {
   return new Set(output.split('\n').filter(Boolean));
 }
 
+/**
+ * Compares the working tree against a pre-run snapshot to detect created/modified files.
+ *
+ * Note: There is an inherent TOCTOU window between the CLI run finishing and
+ * this function executing. In practice this is acceptable because the working
+ * directory is under our control during harness generation.
+ */
 export function diffWorkingTree(
   beforeUntracked: Set<string>,
   cwd: string,
 ): { created: string[]; modified: string[] } {
-  const diffOutput = execFileSync('git', ['diff', '--name-only'], { cwd, encoding: 'utf-8' });
+  // Use HEAD to catch both staged and unstaged modifications
+  const diffOutput = execFileSync('git', ['diff', 'HEAD', '--name-only'], {
+    cwd,
+    encoding: 'utf-8',
+  });
   const modified = diffOutput.split('\n').filter(Boolean);
 
   const afterUntracked = snapshotUntrackedFiles(cwd);

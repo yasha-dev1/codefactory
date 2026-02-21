@@ -1,4 +1,4 @@
-import { spawn } from 'child_process';
+import { spawn } from 'node:child_process';
 import type { z } from 'zod';
 import chalk from 'chalk';
 
@@ -64,6 +64,10 @@ export class KiroRunner implements AIRunner {
     const cwd = this.options.cwd ?? process.cwd();
 
     const args = ['chat', '--no-interactive'];
+
+    if (this.options.maxTurns) {
+      args.push('--max-turns', String(this.options.maxTurns));
+    }
 
     if (config.trustTools === 'all') {
       args.push('--trust-all-tools');

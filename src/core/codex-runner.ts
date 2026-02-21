@@ -1,4 +1,4 @@
-import { spawn } from 'child_process';
+import { spawn } from 'node:child_process';
 import type { z } from 'zod';
 import chalk from 'chalk';
 
@@ -64,6 +64,10 @@ export class CodexRunner implements AIRunner {
     const cwd = this.options.cwd ?? process.cwd();
 
     const args = ['exec', prompt, '--approval-mode', config.approvalMode, '--quiet'];
+
+    if (this.options.maxTurns) {
+      args.push('--max-turns', String(this.options.maxTurns));
+    }
 
     if (config.systemPrompt) {
       args.push('--system-prompt', config.systemPrompt);

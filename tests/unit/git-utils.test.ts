@@ -7,6 +7,8 @@ import {
   getCurrentBranch,
   getHeadSha,
   hasUncommittedChanges,
+  snapshotUntrackedFiles,
+  diffWorkingTree,
 } from '../../src/utils/git.js';
 
 const execAsync = promisify(exec);
@@ -65,6 +67,66 @@ describe('git utility functions', () => {
       await execAsync('touch staged.txt && git add staged.txt', { cwd: repoDir });
       const result = await hasUncommittedChanges(repoDir);
       expect(result).toBe(true);
+    });
+  });
+
+  describe('snapshotUntrackedFiles', () => {
+    it('should return empty set for clean repo', () => {
+      const result = snapshotUntrackedFiles(repoDir);
+      expect(result.size).toBe(0);
+    });
+
+    it('should detect untracked files', async () => {
+      await execAsync('touch newfile.txt', { cwd: repoDir });
+      const result = snapshotUntrackedFiles(repoDir);
+      expect(result.has('newfile.txt')).toBe(true);
+    });
+
+    it('should not include tracked files', async () => {
+      await execAsync('touch tracked.txt && git add tracked.txt && git commit -m "add"', {
+        cwd: repoDir,
+      });
+      const result = snapshotUntrackedFiles(repoDir);
+      expect(result.has('tracked.txt')).toBe(false);
+    });
+  });
+
+  describe('diffWorkingTree', () => {
+    it('should detect newly created files', async () => {
+      const before = snapshotUntrackedFiles(repoDir);
+      await execAsync('touch brand-new.txt', { cwd: repoDir });
+      const { created, modified } = diffWorkingTree(before, repoDir);
+      expect(created).toContain('brand-new.txt');
+      expect(modified).toEqual([]);
+    });
+
+    it('should detect modified tracked files', async () => {
+      await execAsync(
+        'echo "original" > tracked.txt && git add tracked.txt && git commit -m "add"',
+        { cwd: repoDir },
+      );
+      const before = snapshotUntrackedFiles(repoDir);
+      await execAsync('echo "changed" > tracked.txt', { cwd: repoDir });
+      const { created, modified } = diffWorkingTree(before, repoDir);
+      expect(modified).toContain('tracked.txt');
+      expect(created).toEqual([]);
+    });
+
+    it('should detect staged modifications', async () => {
+      await execAsync('echo "original" > staged.txt && git add staged.txt && git commit -m "add"', {
+        cwd: repoDir,
+      });
+      const before = snapshotUntrackedFiles(repoDir);
+      await execAsync('echo "changed" > staged.txt && git add staged.txt', { cwd: repoDir });
+      const { modified } = diffWorkingTree(before, repoDir);
+      expect(modified).toContain('staged.txt');
+    });
+
+    it('should return empty lists for clean repo', () => {
+      const before = snapshotUntrackedFiles(repoDir);
+      const { created, modified } = diffWorkingTree(before, repoDir);
+      expect(created).toEqual([]);
+      expect(modified).toEqual([]);
     });
   });
 });

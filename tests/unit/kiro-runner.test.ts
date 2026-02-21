@@ -99,6 +99,8 @@ describe('KiroRunner', () => {
         expect.arrayContaining([
           'chat',
           '--no-interactive',
+          '--max-turns',
+          '5',
           '--trust-tools',
           'read,glob,grep,shell',
           '--system-prompt',

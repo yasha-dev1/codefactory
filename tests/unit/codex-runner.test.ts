@@ -102,6 +102,8 @@ describe('CodexRunner', () => {
           '--approval-mode',
           'full-auto',
           '--quiet',
+          '--max-turns',
+          '5',
           '--system-prompt',
           expect.any(String),
         ]),

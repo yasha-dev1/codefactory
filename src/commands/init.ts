@@ -1,6 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
-import { execFile, execSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { logger } from '../ui/logger.js';
@@ -436,8 +436,18 @@ async function ensureGitHubLabels(repoRoot: string, ciProvider: string): Promise
   logger.info('Ensuring GitHub labels exist...');
   for (const label of GITHUB_LABELS) {
     try {
-      execSync(
-        `gh label create "${label.name}" --color "${label.color}" --description "${label.description}" --force`,
+      execFileSync(
+        'gh',
+        [
+          'label',
+          'create',
+          label.name,
+          '--color',
+          label.color,
+          '--description',
+          label.description,
+          '--force',
+        ],
         { cwd: repoRoot, stdio: 'ignore' },
       );
     } catch {
