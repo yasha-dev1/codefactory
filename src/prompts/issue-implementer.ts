@@ -141,10 +141,8 @@ When triggered via \`workflow_dispatch\` (issue mode):
 9. **PR creation**:
    - Stage all changes, commit: \`feat: implement #<issue-number> — <issue-title>\`
    - Push the branch
-   - Create a pull request:
-     - Title: \`feat: <issue-title>\`
-     - Body: summary + quality gates table + \`Closes #<issue-number>\` + \`<!-- issue-implementer: #<issue-number> -->\`
-     - Labels: \`agent-pr\`
+   - Create a pull request: \`gh pr create --label "agent-pr" --title "feat: <issue-title>" --body "..."\`
+     - Body must include: implementation summary, quality gates results table, \`Closes #<issue-number>\`, and \`<!-- issue-implementer: #<issue-number> -->\`
    - Comment on the issue: "PR created: <pr-url>"
 
 10. **Escalation (failure handler)**:
