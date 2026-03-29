@@ -6,7 +6,7 @@ Workers are self-hosted agents that register with the gateway, receive job steps
 
 ```bash
 docker run -d \
-  -e WORKER_GATEWAY_URL=http://your-gateway:8585 \
+  -e WORKER_GATEWAY_URL=http://your-gateway:8686 \
   -e WORKER_REGISTRATION_SECRET=your-secret \
   -e WORKER_CAPABILITIES=claude \
   codefactory-worker-agent
@@ -18,7 +18,7 @@ docker run -d \
 cd gateway/worker-agent
 pip install -e .
 
-export WORKER_GATEWAY_URL=http://your-gateway:8585
+export WORKER_GATEWAY_URL=http://your-gateway:8686
 export WORKER_REGISTRATION_SECRET=your-secret
 export WORKER_CAPABILITIES=claude
 
@@ -29,7 +29,7 @@ codefactory-worker
 
 | Variable                     | Default  | Required | Description                                                   |
 | ---------------------------- | -------- | -------- | ------------------------------------------------------------- |
-| `WORKER_GATEWAY_URL`         | --       | Yes      | Full URL of the gateway API (e.g., `http://host:8585`)        |
+| `WORKER_GATEWAY_URL`         | --       | Yes      | Full URL of the gateway API (e.g., `http://host:8686`)        |
 | `WORKER_REGISTRATION_SECRET` | --       | Yes      | Must match `GATEWAY_REGISTRATION_SECRET` on the gateway       |
 | `WORKER_CAPABILITIES`        | `claude` | No       | Comma-separated list of AI CLI tools available on this worker |
 
@@ -40,7 +40,7 @@ Once a worker starts, it registers with the gateway and begins sending heartbeat
 You can also check via the API:
 
 ```bash
-curl http://your-gateway:8585/api/v1/workers
+curl http://your-gateway:8686/api/v1/workers
 ```
 
 ## Troubleshooting

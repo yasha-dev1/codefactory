@@ -8,97 +8,97 @@
 // You should NOT make any changes in this file as it will be overwritten.
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
-import { Route as rootRouteImport } from './routes/__root';
-import { Route as WorkersRouteImport } from './routes/workers';
-import { Route as WebhooksRouteImport } from './routes/webhooks';
-import { Route as JobsRouteImport } from './routes/jobs';
-import { Route as IndexRouteImport } from './routes/index';
+import { Route as rootRouteImport } from './routes/__root'
+import { Route as WorkersRouteImport } from './routes/workers'
+import { Route as WebhooksRouteImport } from './routes/webhooks'
+import { Route as JobsRouteImport } from './routes/jobs'
+import { Route as IndexRouteImport } from './routes/index'
 
 const WorkersRoute = WorkersRouteImport.update({
   id: '/workers',
   path: '/workers',
   getParentRoute: () => rootRouteImport,
-} as any);
+} as any)
 const WebhooksRoute = WebhooksRouteImport.update({
   id: '/webhooks',
   path: '/webhooks',
   getParentRoute: () => rootRouteImport,
-} as any);
+} as any)
 const JobsRoute = JobsRouteImport.update({
   id: '/jobs',
   path: '/jobs',
   getParentRoute: () => rootRouteImport,
-} as any);
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
-} as any);
+} as any)
 
 export interface FileRoutesByFullPath {
-  '/': typeof IndexRoute;
-  '/jobs': typeof JobsRoute;
-  '/webhooks': typeof WebhooksRoute;
-  '/workers': typeof WorkersRoute;
+  '/': typeof IndexRoute
+  '/jobs': typeof JobsRoute
+  '/webhooks': typeof WebhooksRoute
+  '/workers': typeof WorkersRoute
 }
 export interface FileRoutesByTo {
-  '/': typeof IndexRoute;
-  '/jobs': typeof JobsRoute;
-  '/webhooks': typeof WebhooksRoute;
-  '/workers': typeof WorkersRoute;
+  '/': typeof IndexRoute
+  '/jobs': typeof JobsRoute
+  '/webhooks': typeof WebhooksRoute
+  '/workers': typeof WorkersRoute
 }
 export interface FileRoutesById {
-  __root__: typeof rootRouteImport;
-  '/': typeof IndexRoute;
-  '/jobs': typeof JobsRoute;
-  '/webhooks': typeof WebhooksRoute;
-  '/workers': typeof WorkersRoute;
+  __root__: typeof rootRouteImport
+  '/': typeof IndexRoute
+  '/jobs': typeof JobsRoute
+  '/webhooks': typeof WebhooksRoute
+  '/workers': typeof WorkersRoute
 }
 export interface FileRouteTypes {
-  fileRoutesByFullPath: FileRoutesByFullPath;
-  fullPaths: '/' | '/jobs' | '/webhooks' | '/workers';
-  fileRoutesByTo: FileRoutesByTo;
-  to: '/' | '/jobs' | '/webhooks' | '/workers';
-  id: '__root__' | '/' | '/jobs' | '/webhooks' | '/workers';
-  fileRoutesById: FileRoutesById;
+  fileRoutesByFullPath: FileRoutesByFullPath
+  fullPaths: '/' | '/jobs' | '/webhooks' | '/workers'
+  fileRoutesByTo: FileRoutesByTo
+  to: '/' | '/jobs' | '/webhooks' | '/workers'
+  id: '__root__' | '/' | '/jobs' | '/webhooks' | '/workers'
+  fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
-  IndexRoute: typeof IndexRoute;
-  JobsRoute: typeof JobsRoute;
-  WebhooksRoute: typeof WebhooksRoute;
-  WorkersRoute: typeof WorkersRoute;
+  IndexRoute: typeof IndexRoute
+  JobsRoute: typeof JobsRoute
+  WebhooksRoute: typeof WebhooksRoute
+  WorkersRoute: typeof WorkersRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
     '/workers': {
-      id: '/workers';
-      path: '/workers';
-      fullPath: '/workers';
-      preLoaderRoute: typeof WorkersRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
+      id: '/workers'
+      path: '/workers'
+      fullPath: '/workers'
+      preLoaderRoute: typeof WorkersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/webhooks': {
-      id: '/webhooks';
-      path: '/webhooks';
-      fullPath: '/webhooks';
-      preLoaderRoute: typeof WebhooksRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
+      id: '/webhooks'
+      path: '/webhooks'
+      fullPath: '/webhooks'
+      preLoaderRoute: typeof WebhooksRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/jobs': {
-      id: '/jobs';
-      path: '/jobs';
-      fullPath: '/jobs';
-      preLoaderRoute: typeof JobsRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
+      id: '/jobs'
+      path: '/jobs'
+      fullPath: '/jobs'
+      preLoaderRoute: typeof JobsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
-      id: '/';
-      path: '/';
-      fullPath: '/';
-      preLoaderRoute: typeof IndexRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -107,7 +107,7 @@ const rootRouteChildren: RootRouteChildren = {
   JobsRoute: JobsRoute,
   WebhooksRoute: WebhooksRoute,
   WorkersRoute: WorkersRoute,
-};
+}
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
-  ._addFileTypes<FileRouteTypes>();
+  ._addFileTypes<FileRouteTypes>()

@@ -15,14 +15,14 @@ cp .env.example .env
 docker compose up -d
 ```
 
-The gateway API will be available at `http://localhost:8585` and the dashboard at `http://localhost:5173`.
+The gateway API will be available at `http://localhost:8686` and the dashboard at `http://localhost:5173`.
 
 ## Environment Variables
 
 | Variable                        | Default                                                         | Required | Description                                                  |
 | ------------------------------- | --------------------------------------------------------------- | -------- | ------------------------------------------------------------ |
 | `GATEWAY_HOST`                  | `0.0.0.0`                                                       | No       | API listen address                                           |
-| `GATEWAY_PORT`                  | `8585`                                                          | No       | API listen port                                              |
+| `GATEWAY_PORT`                  | `8686`                                                          | No       | API listen port                                              |
 | `GATEWAY_DEBUG`                 | `false`                                                         | No       | Enable debug mode (verbose logging, auto-reload)             |
 | `GATEWAY_CORS_ORIGINS`          | `["http://localhost:5173"]`                                     | No       | Allowed CORS origins (JSON array)                            |
 | `GATEWAY_GITHUB_WEBHOOK_SECRET` | --                                                              | Yes      | GitHub webhook secret for HMAC-SHA256 signature verification |

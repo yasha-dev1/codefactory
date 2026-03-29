@@ -10,6 +10,6 @@ RUN poetry config virtualenvs.create false \
 
 COPY gateway/ gateway/
 
-EXPOSE 8585
+EXPOSE 8686
 
-CMD ["uvicorn", "gateway.main:app", "--host", "0.0.0.0", "--port", "8585"]
+CMD ["uvicorn", "gateway.main:app", "--host", "0.0.0.0", "--port", "8686"]

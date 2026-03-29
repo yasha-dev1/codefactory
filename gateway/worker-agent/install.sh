@@ -11,7 +11,7 @@ pip install -e .
 
 echo ""
 echo "Worker agent installed! Configure with environment variables:"
-echo "  WORKER_GATEWAY_URL=http://your-gateway:8585"
+echo "  WORKER_GATEWAY_URL=http://your-gateway:8686"
 echo "  WORKER_REGISTRATION_SECRET=your-secret"
 echo "  WORKER_CAPABILITIES=claude"
 echo ""

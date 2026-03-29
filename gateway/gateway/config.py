@@ -8,7 +8,7 @@ class Settings(BaseSettings):
 
     # Server configuration
     host: str = "0.0.0.0"
-    port: int = 8585
+    port: int = 8686
     debug: bool = False
 
     # CORS configuration

@@ -8,7 +8,7 @@ CodeFactory Gateway is a self-hosted backend that receives GitHub webhooks, orch
 GitHub Repository
     |
     v (webhook: issues, pull_request, push)
-Gateway API (FastAPI :8585)
+Gateway API (FastAPI :8686)
     |-- Signature verification (HMAC-SHA256)
     |-- Event parsing + job creation
     +-- Workflow dispatch

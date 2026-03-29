@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings
 
 
 class WorkerConfig(BaseSettings):
-    gateway_url: str = "http://localhost:8585"
+    gateway_url: str = "http://localhost:8686"
     registration_secret: str = ""
     hostname: str = ""
     capabilities: str = "claude"

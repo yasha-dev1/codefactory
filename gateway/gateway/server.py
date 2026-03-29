@@ -52,8 +52,8 @@ def create_app() -> FastAPI:
     app.include_router(job_router)
 
     @app.get("/api/v1/health")
-    async def health() -> dict[str, str]:
-        return {"status": "healthy"}
+    async def health() -> dict:
+        return {"status": "healthy", "version": "0.1.0"}
 
     return app
 

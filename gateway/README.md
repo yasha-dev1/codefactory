@@ -35,7 +35,7 @@ docker compose up
 
 | Service     | Port | Description          |
 | ----------- | ---- | -------------------- |
-| gateway-api | 8585 | FastAPI backend      |
+| gateway-api | 8686 | FastAPI backend      |
 | postgres    | 5432 | Gateway database     |
 | redis       | 6379 | Celery broker        |
 | step-worker | --   | Celery step executor |
@@ -46,7 +46,7 @@ docker compose up
 | Variable                        | Default                                                         | Description                                      |
 | ------------------------------- | --------------------------------------------------------------- | ------------------------------------------------ |
 | `GATEWAY_HOST`                  | `0.0.0.0`                                                       | API listen address                               |
-| `GATEWAY_PORT`                  | `8585`                                                          | API listen port                                  |
+| `GATEWAY_PORT`                  | `8686`                                                          | API listen port                                  |
 | `GATEWAY_DEBUG`                 | `false`                                                         | Enable debug mode                                |
 | `GATEWAY_CORS_ORIGINS`          | `["http://localhost:5173"]`                                     | Allowed CORS origins                             |
 | `GATEWAY_GITHUB_WEBHOOK_SECRET` | --                                                              | GitHub webhook secret for signature verification |
@@ -62,7 +62,7 @@ docker compose up
 # Backend
 cd gateway
 poetry install
-uvicorn gateway.main:app --reload --port 8585
+uvicorn gateway.main:app --reload --port 8686
 
 # Frontend
 cd gateway/dashboard/frontend

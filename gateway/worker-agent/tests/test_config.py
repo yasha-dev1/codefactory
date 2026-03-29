@@ -8,7 +8,7 @@ def test_default_config():
     with patch.dict(os.environ, {}, clear=True):
         from worker_agent.config import WorkerConfig
         c = WorkerConfig()
-        assert c.gateway_url == "http://localhost:8585"
+        assert c.gateway_url == "http://localhost:8686"
         assert c.heartbeat_interval == 30
         assert c.ai_cli == "claude"
 

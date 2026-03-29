@@ -8,7 +8,7 @@ def test_default_settings():
 
         s = Settings()
         assert s.host == "0.0.0.0"
-        assert s.port == 8585
+        assert s.port == 8686
         assert s.debug is False
         assert "http://localhost:5173" in s.cors_origins
 
