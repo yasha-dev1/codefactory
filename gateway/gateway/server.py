@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from gateway.config import settings
 from gateway.jobs.router import router as job_router
 from gateway.webhooks.github import router as webhook_router
+from gateway.workers.router import router as worker_router
 
 
 def _initialize_pyworkflow() -> None:
@@ -47,7 +48,7 @@ def create_app() -> FastAPI:
 
     # Include routers
     app.include_router(webhook_router)
-    # TODO: app.include_router(worker_router)
+    app.include_router(worker_router)
     app.include_router(job_router)
 
     @app.get("/api/v1/health")

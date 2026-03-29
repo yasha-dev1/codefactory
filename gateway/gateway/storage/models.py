@@ -39,6 +39,32 @@ class JobStatus(str, enum.Enum):
     cancelled = "cancelled"
 
 
+class WorkerStatus(str, enum.Enum):
+    online = "online"
+    offline = "offline"
+    busy = "busy"
+
+
+class Worker(Base):
+    __tablename__ = "workers"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    hostname: Mapped[str] = mapped_column(String(255))
+    api_token_hash: Mapped[str] = mapped_column(String(255))
+    capabilities: Mapped[str] = mapped_column(Text, default="[]")
+    labels: Mapped[str] = mapped_column(Text, default="{}")
+    status: Mapped[str] = mapped_column(String(20), default=WorkerStatus.online.value)
+    last_heartbeat_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    registered_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    current_run_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
 class Job(Base):
     __tablename__ = "jobs"
 
