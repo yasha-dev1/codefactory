@@ -1,0 +1,5 @@
+runtime: celery
+durable: false
+celery:
+  broker_url: ${CELERY_BROKER_URL:-redis://localhost:6379/0}
+  result_backend: ${CELERY_RESULT_BACKEND:-redis://localhost:6379/1}
