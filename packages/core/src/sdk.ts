@@ -8,6 +8,7 @@ import { getProviderConfig } from './auth.js';
 import { createCompaction } from './compaction.js';
 import type { CompactionOptions } from './compaction.js';
 import { buildOllamaModel, DEFAULT_OLLAMA_BASE_URL } from './ollama.js';
+import { loadSkills, type Skill } from './skills.js';
 import { buildSystemPrompt } from './system-prompt.js';
 import { createCodingTools, type Tool } from './tools/index.js';
 
@@ -28,6 +29,8 @@ export interface CreateAgentSessionOptions {
   tools?: Tool[];
   /** Compaction options (set to false to disable) */
   compaction?: CompactionOptions | false;
+  /** Pre-loaded skills (SDK escape hatch; skips project-dir discovery when provided) */
+  skills?: Skill[];
 }
 
 export interface CreateAgentSessionResult {
@@ -65,10 +68,23 @@ export async function createAgentSession(
   // Build tools
   const tools = options.tools ?? createCodingTools(cwd);
 
+  // Load skills (project-local `<cwd>/.harnext/skills/`). SDK callers can pre-load and pass in.
+  let skills: Skill[];
+  if (options.skills) {
+    skills = options.skills;
+  } else {
+    const { skills: loaded, diagnostics } = loadSkills({ cwd });
+    for (const d of diagnostics) {
+      console.warn(`[harnext] skill ${d.type}: ${d.message} (${d.path})`);
+    }
+    skills = loaded;
+  }
+
   // Build system prompt
   const systemPrompt = buildSystemPrompt({
     cwd,
     customPrompt: options.systemPrompt,
+    skills,
   });
 
   // Set up compaction (enabled by default)
@@ -98,6 +114,7 @@ export async function createAgentSession(
     systemPrompt,
     tools,
     thinkingLevel,
+    skills,
   });
 
   return { session };

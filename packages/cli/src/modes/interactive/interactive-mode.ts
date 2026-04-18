@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 import type { AgentEvent } from '@mariozechner/pi-agent-core';
 import { compactNow, estimateTotalTokens, setDefault } from '@harnext/core';
 import chalk from 'chalk';
@@ -7,7 +9,7 @@ import type { Textarea } from '../../cli/input.js';
 import { pickModel } from '../../cli/model-picker.js';
 import { select } from '../../cli/select.js';
 import type { SelectItem } from '../../cli/select.js';
-import type { AgentSession } from '@harnext/core';
+import type { AgentSession, Skill } from '@harnext/core';
 import { createMarkdownStreamer } from './markdown-stream.js';
 import type { MarkdownStreamer } from './markdown-stream.js';
 import * as render from './render.js';
@@ -88,6 +90,57 @@ const SLASH_COMMANDS: SlashCommand[] = [
     },
   },
   {
+    name: '/skills',
+    description: 'List loaded skills and view a skill',
+    action: async (ctx) => {
+      const skills = ctx.session.skills;
+      console.log();
+      if (skills.length === 0) {
+        console.log(chalk.dim('  No skills loaded.'));
+        console.log(chalk.dim('  Add SKILL.md files under <cwd>/.harnext/skills/<skill-name>/'));
+        console.log();
+        return true;
+      }
+
+      console.log(chalk.bold(`  Skills (${skills.length}):`));
+      for (const s of skills) {
+        const hidden = s.disableModelInvocation ? chalk.yellow(' [hidden from prompt]') : '';
+        console.log(chalk.cyan(`  /skill:${s.name}`) + hidden);
+        console.log(chalk.dim(`    ${s.description}`));
+        console.log(chalk.dim(`    ${s.filePath}`));
+      }
+      console.log();
+
+      const items: SelectItem<Skill>[] = skills.map((skill) => ({
+        label: `/skill:${skill.name}`,
+        value: skill,
+        hint: skill.description,
+      }));
+      const selected = await select(items, {
+        title: 'View a skill (esc to skip)',
+      });
+      if (selected) {
+        try {
+          const content = readFileSync(selected.filePath, 'utf-8');
+          console.log();
+          console.log(chalk.bold(`  ${selected.filePath}`));
+          console.log(chalk.dim('  ' + '─'.repeat(60)));
+          for (const line of content.split('\n')) {
+            console.log(`  ${line}`);
+          }
+          console.log();
+        } catch (err) {
+          console.log(
+            chalk.red('  Failed to read skill: ') +
+              (err instanceof Error ? err.message : String(err)),
+          );
+          console.log();
+        }
+      }
+      return true;
+    },
+  },
+  {
     name: '/help',
     description: 'Show available commands',
     action: async () => {
@@ -110,18 +163,52 @@ const SLASH_COMMANDS: SlashCommand[] = [
   },
 ];
 
-async function selectSlashCommand(): Promise<SlashCommand | undefined> {
-  const items: SelectItem<SlashCommand>[] = SLASH_COMMANDS.map((cmd) => ({
-    label: cmd.name,
-    value: cmd,
-    hint: cmd.description,
-  }));
+type SelectedEntry = { kind: 'command'; command: SlashCommand } | { kind: 'skill'; skill: Skill };
+
+async function selectSlashCommandOrSkill(
+  skills: Skill[],
+): Promise<SelectedEntry | undefined> {
+  const items: SelectItem<SelectedEntry>[] = [
+    ...SLASH_COMMANDS.map((cmd) => ({
+      label: cmd.name,
+      value: { kind: 'command', command: cmd } as SelectedEntry,
+      hint: cmd.description,
+    })),
+    ...skills
+      .filter((s) => !s.disableModelInvocation)
+      .map((skill) => ({
+        label: `/skill:${skill.name}`,
+        value: { kind: 'skill', skill } as SelectedEntry,
+        hint: skill.description,
+      })),
+  ];
 
   return select(items, { title: 'Select a command' });
 }
 
 function findSlashCommand(input: string): SlashCommand | undefined {
   return SLASH_COMMANDS.find((cmd) => cmd.name === input);
+}
+
+function findSkill(skills: Skill[], name: string): Skill | undefined {
+  return skills.find((s) => s.name === name);
+}
+
+function expandSkillInvocation(skill: Skill, args: string): string {
+  const content = readFileSync(skill.filePath, 'utf-8');
+  const trimmedArgs = args.trim();
+  const parts = [
+    `<skill name="${skill.name}" location="${skill.filePath}">`,
+    `References are relative to ${skill.baseDir}.`,
+    '',
+    content,
+    '</skill>',
+  ];
+  if (trimmedArgs.length > 0) {
+    parts.push('');
+    parts.push(`User: ${trimmedArgs}`);
+  }
+  return parts.join('\n');
 }
 
 // ── Animated spinner (rendered inline on the info line) ─────────────
@@ -215,10 +302,18 @@ export async function runInteractiveMode(
   // and scrolls out naturally as the session grows.
   process.stdout.write(render.header());
 
-  const completions = SLASH_COMMANDS.map((cmd) => ({
-    text: cmd.name,
-    hint: cmd.description,
-  }));
+  const completions = [
+    ...SLASH_COMMANDS.map((cmd) => ({
+      text: cmd.name,
+      hint: cmd.description,
+    })),
+    ...session.skills
+      .filter((s) => !s.disableModelInvocation)
+      .map((skill) => ({
+        text: `/skill:${skill.name}`,
+        hint: skill.description,
+      })),
+  ];
 
   // eslint-disable-next-line prefer-const
   let textarea: Textarea;
@@ -392,20 +487,81 @@ export async function runInteractiveMode(
       resolve();
     });
 
+    // Submit `text` to the agent as a user prompt, echoing `echo` above the
+    // textarea (defaults to echoing `text` itself). Handles spinner + busy flag.
+    const runPrompt = async (text: string, echo?: string): Promise<void> => {
+      textarea.writeAbove(render.userMessage(echo ?? text) + '\n');
+      agentBusy = true;
+      startSpinner();
+      try {
+        await session.prompt(text);
+      } catch (error) {
+        textarea.writeAbove(
+          chalk.red('  Error: ') +
+            (error instanceof Error ? error.message : String(error)) +
+            '\n\n',
+        );
+      } finally {
+        agentBusy = false;
+        stopSpinner();
+      }
+    };
+
+    const invokeSkill = async (skill: Skill, args: string, echoLabel: string): Promise<void> => {
+      let expanded: string;
+      try {
+        expanded = expandSkillInvocation(skill, args);
+      } catch (err) {
+        textarea.writeAbove(
+          chalk.red('  Failed to load skill: ') +
+            (err instanceof Error ? err.message : String(err)) +
+            '\n\n',
+        );
+        return;
+      }
+      await runPrompt(expanded, echoLabel);
+    };
+
     textarea.on('submit', async (input: string) => {
       if (!input) return;
 
       if (input === '/' && !agentBusy) {
+        let skillToInvoke: Skill | undefined;
         const shouldContinue = await runWithPause(async () => {
-          const cmd = await selectSlashCommand();
-          if (!cmd) return true;
-          return cmd.action(cmdCtx);
+          const selected = await selectSlashCommandOrSkill(session.skills);
+          if (!selected) return true;
+          if (selected.kind === 'command') return selected.command.action(cmdCtx);
+          skillToInvoke = selected.skill;
+          return true;
         });
         if (!shouldContinue) {
           stopSpinner();
           textarea.close();
           resolve();
+          return;
         }
+        if (skillToInvoke) {
+          await invokeSkill(skillToInvoke, '', `/skill:${skillToInvoke.name}`);
+        }
+        return;
+      }
+
+      if (input.startsWith('/skill:') && !agentBusy) {
+        const rest = input.slice('/skill:'.length);
+        const spaceIdx = rest.search(/\s/);
+        const name = spaceIdx === -1 ? rest : rest.slice(0, spaceIdx);
+        const args = spaceIdx === -1 ? '' : rest.slice(spaceIdx + 1);
+        const skill = findSkill(session.skills, name);
+        if (!skill) {
+          textarea.writeAbove(
+            chalk.red(`  Unknown skill: ${name}`) +
+              '\n' +
+              chalk.dim('  Type / to see available skills') +
+              '\n\n',
+          );
+          return;
+        }
+        await invokeSkill(skill, args, input);
         return;
       }
 
@@ -429,13 +585,9 @@ export async function runInteractiveMode(
         return;
       }
 
-      // Echo the user message above the textarea. Block separators are
-      // attached as a leading '\n' on the *next* block, so we just terminate
-      // this one with a single '\n'.
-      textarea.writeAbove(render.userMessage(input) + '\n');
-
       // Mid-run submit → queue as steering rather than starting a new prompt.
       if (agentBusy) {
+        textarea.writeAbove(render.userMessage(input) + '\n');
         try {
           session.agent.steer({
             role: 'user',
@@ -452,20 +604,7 @@ export async function runInteractiveMode(
         return;
       }
 
-      agentBusy = true;
-      startSpinner();
-      try {
-        await session.prompt(input);
-      } catch (error) {
-        textarea.writeAbove(
-          chalk.red('  Error: ') +
-            (error instanceof Error ? error.message : String(error)) +
-            '\n\n',
-        );
-      } finally {
-        agentBusy = false;
-        stopSpinner();
-      }
+      await runPrompt(input);
     });
   });
 

@@ -1,13 +1,18 @@
+import { formatSkillsForPrompt, type Skill } from './skills.js';
+
 export interface BuildSystemPromptOptions {
   cwd: string;
   customPrompt?: string;
+  skills?: Skill[];
 }
 
 export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
-  if (options.customPrompt) {
-    return options.customPrompt;
-  }
+  const base = options.customPrompt ?? defaultPrompt(options.cwd);
+  const skillsBlock = formatSkillsForPrompt(options.skills ?? []);
+  return skillsBlock ? `${base}${skillsBlock}` : base;
+}
 
+function defaultPrompt(cwd: string): string {
   const date = new Date().toISOString().split('T')[0];
 
   return `You are Harnext, an expert coding assistant. You help users by reading files, executing commands, editing code, and writing new files.
@@ -25,5 +30,5 @@ Guidelines:
 - Show file paths clearly when referencing code.
 
 Current date: ${date}
-Current working directory: ${options.cwd}`;
+Current working directory: ${cwd}`;
 }

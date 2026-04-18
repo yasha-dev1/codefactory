@@ -1,4 +1,22 @@
-export { APP_NAME, VERSION, CONFIG_DIR_NAME, getAgentDir, getSessionsDir } from './config.js';
+export {
+  APP_NAME,
+  VERSION,
+  CONFIG_DIR_NAME,
+  getAgentDir,
+  getSessionsDir,
+  getProjectSkillsDir,
+} from './config.js';
+
+export {
+  loadSkills,
+  loadSkillsFromDir,
+  formatSkillsForPrompt,
+  type Skill,
+  type SkillDiagnostic,
+  type SkillFrontmatter,
+  type LoadSkillsOptions,
+  type LoadSkillsResult,
+} from './skills.js';
 
 export {
   AgentSession,

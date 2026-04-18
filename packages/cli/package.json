@@ -20,7 +20,8 @@
     "@harnext/core": "^0.1.0",
     "@mariozechner/pi-agent-core": "^0.67.68",
     "@mariozechner/pi-ai": "^0.67.68",
-    "chalk": "^5.4.1"
+    "chalk": "^5.4.1",
+    "yaml": "^2.5.0"
   },
   "engines": {
     "node": ">=20"

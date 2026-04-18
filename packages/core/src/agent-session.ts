@@ -7,12 +7,15 @@ import type {
 } from '@mariozechner/pi-agent-core';
 import type { Model } from '@mariozechner/pi-ai';
 
+import type { Skill } from './skills.js';
+
 export interface AgentSessionConfig {
   model: Model<string>;
   systemPrompt: string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   tools: AgentTool<any>[];
   thinkingLevel: ThinkingLevel;
+  skills: Skill[];
 }
 
 export type AgentSessionEventListener = (event: AgentEvent, signal: AbortSignal) => Promise<void> | void;
@@ -57,5 +60,9 @@ export class AgentSession {
 
   get systemPrompt(): string {
     return this.config.systemPrompt;
+  }
+
+  get skills(): Skill[] {
+    return this.config.skills;
   }
 }

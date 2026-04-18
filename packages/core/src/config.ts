@@ -12,3 +12,7 @@ export function getAgentDir(): string {
 export function getSessionsDir(): string {
   return join(getAgentDir(), 'sessions');
 }
+
+export function getProjectSkillsDir(cwd: string = process.cwd()): string {
+  return join(cwd, CONFIG_DIR_NAME, 'skills');
+}
