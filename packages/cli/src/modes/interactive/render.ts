@@ -222,11 +222,25 @@ function getGitBranch(): string {
   return cachedBranch;
 }
 
+// Compact decimal form for token counts on the info line. < 1K shows raw,
+// otherwise scaled with K/M and one decimal (trimmed when it's `.0`).
+function formatTokens(n: number): string {
+  if (n < 1000) return String(n);
+  const trim = (v: number) => {
+    const s = v.toFixed(1);
+    return s.endsWith('.0') ? s.slice(0, -2) : s;
+  };
+  if (n < 1_000_000) return trim(n / 1000) + 'K';
+  return trim(n / 1_000_000) + 'M';
+}
+
 export function inputFooter(
   provider: string,
   model: string,
   cwd: string,
   contextPercent?: number,
+  inputTokens?: number,
+  outputTokens?: number,
 ): string {
   const w = termWidth();
   const home = process.env.HOME ?? '';
@@ -234,7 +248,12 @@ export function inputFooter(
   const branch = getGitBranch();
   const branchStr = branch ? ` (${branch})` : '';
 
-  const ctxStr = contextPercent != null ? ` ${Math.round(contextPercent)}%` : '';
+  const pctPart = contextPercent != null ? ` ${Math.round(contextPercent)}%` : '';
+  const tokPart =
+    inputTokens != null && outputTokens != null
+      ? ` ↑ ${formatTokens(inputTokens)} ↓ ${formatTokens(outputTokens)}`
+      : '';
+  const ctxStr = pctPart + tokPart;
   const rightRaw = `${provider}/${model}`;
   // Right-align `rightRaw`; give `leftRaw` whatever is left (min 1 gap).
   // Truncate left side with an ellipsis if it overflows, so the info line

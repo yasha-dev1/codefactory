@@ -150,6 +150,24 @@ function randomMessage(): string {
   return LOADING_MESSAGES[Math.floor(Math.random() * LOADING_MESSAGES.length)];
 }
 
+// Sum input/output tokens across all assistant turns in the session.
+// Each turn's `input` is cumulative context sent to the model — summing
+// across turns reflects total tokens consumed, not unique tokens.
+function sumSessionUsage(
+  messages: ReadonlyArray<{ role: string; usage?: { input?: number; output?: number } }>,
+): { input: number; output: number } {
+  let input = 0;
+  let output = 0;
+  for (const msg of messages) {
+    if (msg.role !== 'assistant') continue;
+    const u = msg.usage;
+    if (!u) continue;
+    input += u.input ?? 0;
+    output += u.output ?? 0;
+  }
+  return { input, output };
+}
+
 /**
  * Interactive REPL mode with a sticky textarea pinned to the bottom of the
  * terminal via a terminal scroll region. Agent output streams naturally
@@ -248,7 +266,15 @@ export async function runInteractiveMode(
       const ctxTokens = estimateTotalTokens(session.messages);
       const ctxWindow = session.agent.state.model.contextWindow;
       const ctxPercent = ctxWindow ? (ctxTokens / ctxWindow) * 100 : undefined;
-      return render.inputFooter(activeProvider, activeModel, cwd, ctxPercent);
+      const { input, output } = sumSessionUsage(session.messages);
+      return render.inputFooter(
+        activeProvider,
+        activeModel,
+        cwd,
+        ctxPercent,
+        input,
+        output,
+      );
     },
     completions,
   });
