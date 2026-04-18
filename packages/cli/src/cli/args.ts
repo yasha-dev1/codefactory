@@ -1,6 +1,6 @@
 import { VERSION } from '@harnext/core';
 
-export type Mode = 'interactive' | 'print';
+export type Mode = 'interactive' | 'print' | 'heartbeat';
 
 export interface Args {
   mode: Mode;
@@ -12,6 +12,8 @@ export interface Args {
   systemPrompt?: string;
   cwd: string;
   messages: string[];
+  /** Heartbeat name — only set when mode === 'heartbeat'. */
+  heartbeatName?: string;
 }
 
 export function parseArgs(argv: string[]): Args {
@@ -29,6 +31,10 @@ export function parseArgs(argv: string[]): Args {
       case '-p':
       case '--print':
         args.mode = 'print';
+        break;
+      case '--heartbeat':
+        args.mode = 'heartbeat';
+        args.heartbeatName = argv[++i];
         break;
       case '--provider':
         args.provider = argv[++i] ?? args.provider;
@@ -77,6 +83,7 @@ Usage:
 
 Options:
   -p, --print              Run in non-interactive (single-shot) mode
+  --heartbeat <name>       Run the named heartbeat prompt once (for cron)
   --provider <provider>    LLM provider (anthropic, openai, google) [default: anthropic]
   -m, --model <model>      Model ID [default: claude-sonnet-4-6]
   --thinking <level>       Thinking level (off, low, medium, high) [default: off]

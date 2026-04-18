@@ -57,3 +57,53 @@ export function seedBuiltinSkills(): SeedResult {
     return { seeded: false, target, diagnostics };
   }
 }
+
+export interface EnsureResult {
+  target: string;
+  added: string[];
+  present: string[];
+  diagnostics: SkillDiagnostic[];
+}
+
+/**
+ * Top-up copy of bundled skills into the user skills dir. Per bundled entry:
+ * copy if the target path doesn't exist; leave alone if it does. Never
+ * overwrites user edits. Unlike `seedBuiltinSkills`, this runs unconditionally
+ * (intended for explicit invocations like `/init`) and ignores
+ * `HARNEXT_NO_SEED_SKILLS`.
+ */
+export function ensureBundledSkills(): EnsureResult {
+  const target = getUserSkillsDir();
+  const added: string[] = [];
+  const present: string[] = [];
+  const diagnostics: SkillDiagnostic[] = [];
+
+  const source = getBundledSkillsDir();
+  if (!existsSync(source)) {
+    diagnostics.push({
+      type: 'warning',
+      message: 'bundled skills directory missing',
+      path: source,
+    });
+    return { target, added, present, diagnostics };
+  }
+
+  try {
+    mkdirSync(target, { recursive: true });
+    for (const entry of readdirSync(source, { withFileTypes: true })) {
+      if (entry.name.startsWith('.')) continue;
+      const dest = join(target, entry.name);
+      if (existsSync(dest)) {
+        present.push(entry.name);
+        continue;
+      }
+      cpSync(join(source, entry.name), dest, { recursive: true });
+      added.push(entry.name);
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'failed to ensure bundled skills';
+    diagnostics.push({ type: 'warning', message, path: target });
+  }
+
+  return { target, added, present, diagnostics };
+}

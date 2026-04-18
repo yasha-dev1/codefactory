@@ -10,9 +10,37 @@ export {
 
 export {
   seedBuiltinSkills,
+  ensureBundledSkills,
   getBundledSkillsDir,
   type SeedResult,
+  type EnsureResult,
 } from './seed.js';
+
+export {
+  HEARTBEAT_INTERVAL_PRESETS,
+  HEARTBEATS_DIR_NAME,
+  validateHeartbeatName,
+  getHeartbeatsDir,
+  getHeartbeatPaths,
+  getHeartbeatTag,
+  loadHeartbeatConfig,
+  listHeartbeats,
+  saveHeartbeatConfig,
+  deleteHeartbeatConfig,
+  buildCronSchedule,
+  buildCronLine,
+  installCronLine,
+  removeCronLine,
+  findCronLine,
+  appendHeartbeatTick,
+  ensureHeartbeatGitignore,
+  type HeartbeatConfig,
+  type HeartbeatIntervalMinutes,
+  type HeartbeatPaths,
+  type CronLineOptions,
+  type CrontabIO,
+  type HeartbeatTickRecord,
+} from './heartbeat.js';
 
 export {
   loadSkills,

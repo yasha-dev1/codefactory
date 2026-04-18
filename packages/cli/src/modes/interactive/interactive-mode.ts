@@ -1,9 +1,17 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 import type { AgentEvent } from '@mariozechner/pi-agent-core';
-import { compactNow, estimateTotalTokens, setDefault } from '@harnext/core';
+import {
+  compactNow,
+  ensureBundledSkills,
+  estimateTotalTokens,
+  setDefault,
+} from '@harnext/core';
+import type { EnsureResult } from '@harnext/core';
 import chalk from 'chalk';
 
+import { runHeartbeatCommand } from '../../cli/heartbeat-prompt.js';
 import { createTextarea } from '../../cli/input.js';
 import type { Textarea } from '../../cli/input.js';
 import { pickModel } from '../../cli/model-picker.js';
@@ -24,6 +32,8 @@ export interface InteractiveModeOptions {
 interface SlashCommand {
   name: string;
   description: string;
+  /** If false, the textarea stays live during the action (default true pauses it for interactive prompts). */
+  pause?: boolean;
   action: (ctx: CommandContext) => Promise<boolean>; // true = continue, false = exit
 }
 
@@ -33,6 +43,9 @@ interface CommandContext {
   getModel: () => string;
   setModel: (provider: string, modelId: string, model: unknown) => void;
   clearSession: () => void;
+  ensureBundledSkills: () => EnsureResult;
+  invokeSkill: (skill: Skill, args: string, echoLabel: string) => Promise<void>;
+  writeAbove: (text: string) => void;
 }
 
 const SLASH_COMMANDS: SlashCommand[] = [
@@ -86,6 +99,59 @@ const SLASH_COMMANDS: SlashCommand[] = [
     description: 'Clear conversation and start a new session',
     action: async (ctx) => {
       ctx.clearSession();
+      return true;
+    },
+  },
+  {
+    name: '/init',
+    description: 'Seed built-in skills and scaffold a project setup skill',
+    pause: false,
+    action: async (ctx) => {
+      const r = ctx.ensureBundledSkills();
+      if (r.added.length > 0) {
+        ctx.writeAbove(
+          chalk.green(`  Added bundled skills to ${r.target}: ${r.added.join(', ')}`) + '\n',
+        );
+      }
+      for (const d of r.diagnostics) {
+        ctx.writeAbove(chalk.yellow(`  ${d.type}: ${d.message}`) + '\n');
+      }
+
+      // Prefer the session-loaded copy (honors user edits); fall back to the
+      // just-seeded file on disk so /init works even if this is the first run
+      // and the session was created before the seed existed.
+      let skill: Skill | undefined = ctx.session.skills.find((s) => s.name === 'init');
+      if (!skill) {
+        const filePath = join(r.target, 'init', 'SKILL.md');
+        if (existsSync(filePath)) {
+          skill = {
+            name: 'init',
+            description: '',
+            filePath,
+            baseDir: dirname(filePath),
+            disableModelInvocation: false,
+          };
+        }
+      }
+      if (!skill) {
+        ctx.writeAbove(
+          chalk.red('  init skill not available. Restart harnext and try again.') + '\n\n',
+        );
+        return true;
+      }
+      await ctx.invokeSkill(skill, '', '/init');
+      return true;
+    },
+  },
+  {
+    name: '/heartbeat',
+    description: 'Configure a cron-driven heartbeat for this project',
+    action: async () => {
+      await runHeartbeatCommand({
+        cwd: process.cwd(),
+        cliPath: process.argv[1] ?? '',
+        nodePath: process.execPath,
+      });
       return true;
     },
   },
@@ -439,35 +505,6 @@ export async function runInteractiveMode(
     }
   });
 
-  const cmdCtx: CommandContext = {
-    session,
-    getProvider: () => activeProvider,
-    getModel: () => activeModel,
-    setModel: (provider, modelId, model) => {
-      activeProvider = provider;
-      activeModel = modelId;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      session.agent.state.model = model as any;
-    },
-    clearSession: () => {
-      try {
-        session.agent.abort();
-      } catch {
-        // no active run — nothing to abort
-      }
-      session.agent.reset();
-      pendingToolArgs.clear();
-      currentText = '';
-      markdown = null;
-      asstPendingNewlines = '';
-      asstAtLineStart = true;
-      // Clear the visible screen (ESC[2J) and move cursor home (ESC[H),
-      // then reprint the static header so the session starts fresh.
-      process.stdout.write('\x1B[2J\x1B[H');
-      process.stdout.write(render.header());
-    },
-  };
-
   await new Promise<void>((resolve) => {
     // Run a command with full terminal control: tear down the sticky textarea,
     // let the command's own UI (select menus, prompts) own stdin, then restore.
@@ -522,15 +559,62 @@ export async function runInteractiveMode(
       await runPrompt(expanded, echoLabel);
     };
 
+    const cmdCtx: CommandContext = {
+      session,
+      getProvider: () => activeProvider,
+      getModel: () => activeModel,
+      setModel: (provider, modelId, model) => {
+        activeProvider = provider;
+        activeModel = modelId;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        session.agent.state.model = model as any;
+      },
+      clearSession: () => {
+        try {
+          session.agent.abort();
+        } catch {
+          // no active run — nothing to abort
+        }
+        session.agent.reset();
+        pendingToolArgs.clear();
+        currentText = '';
+        markdown = null;
+        asstPendingNewlines = '';
+        asstAtLineStart = true;
+        // Clear the visible screen (ESC[2J) and move cursor home (ESC[H),
+        // then reprint the static header so the session starts fresh.
+        process.stdout.write('\x1B[2J\x1B[H');
+        process.stdout.write(render.header());
+      },
+      ensureBundledSkills,
+      invokeSkill,
+      writeAbove: (text) => textarea.writeAbove(text),
+    };
+
+    // Run a command action. Commands with pause:false stay live on the textarea
+    // (needed when the action triggers an agent run via invokeSkill); otherwise
+    // the textarea is torn down so the command can own stdin for its own UI.
+    const runCommand = (cmd: SlashCommand): Promise<boolean> =>
+      cmd.pause === false ? cmd.action(cmdCtx) : runWithPause(() => cmd.action(cmdCtx));
+
     textarea.on('submit', async (input: string) => {
       if (!input) return;
 
       if (input === '/' && !agentBusy) {
         let skillToInvoke: Skill | undefined;
+        let commandToRun: SlashCommand | undefined;
         const shouldContinue = await runWithPause(async () => {
           const selected = await selectSlashCommandOrSkill(session.skills);
           if (!selected) return true;
-          if (selected.kind === 'command') return selected.command.action(cmdCtx);
+          if (selected.kind === 'command') {
+            // If the command wants to stay live (e.g. /init), defer its action
+            // until after we've resumed the textarea.
+            if (selected.command.pause === false) {
+              commandToRun = selected.command;
+              return true;
+            }
+            return selected.command.action(cmdCtx);
+          }
           skillToInvoke = selected.skill;
           return true;
         });
@@ -539,6 +623,15 @@ export async function runInteractiveMode(
           textarea.close();
           resolve();
           return;
+        }
+        if (commandToRun) {
+          const cont = await commandToRun.action(cmdCtx);
+          if (!cont) {
+            stopSpinner();
+            textarea.close();
+            resolve();
+            return;
+          }
         }
         if (skillToInvoke) {
           await invokeSkill(skillToInvoke, '', `/skill:${skillToInvoke.name}`);
@@ -568,7 +661,7 @@ export async function runInteractiveMode(
       if (input.startsWith('/') && !agentBusy) {
         const cmd = findSlashCommand(input);
         if (cmd) {
-          const shouldContinue = await runWithPause(() => cmd.action(cmdCtx));
+          const shouldContinue = await runCommand(cmd);
           if (!shouldContinue) {
             stopSpinner();
             textarea.close();

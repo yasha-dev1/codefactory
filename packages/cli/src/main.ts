@@ -10,8 +10,14 @@ import chalk from 'chalk';
 
 import { parseArgs } from './cli/args.js';
 import { ensureAuth } from './cli/onboarding.js';
-import { createAgentSession, getProviderById, loadPreferences } from '@harnext/core';
-import { runInteractiveMode, runPrintMode } from './modes/index.js';
+import {
+  appendHeartbeatTick,
+  createAgentSession,
+  getProviderById,
+  loadHeartbeatConfig,
+  loadPreferences,
+} from '@harnext/core';
+import { runHeartbeatMode, runInteractiveMode, runPrintMode } from './modes/index.js';
 
 const FALLBACK_PROVIDER = 'anthropic';
 const FALLBACK_MODEL = 'claude-sonnet-4-6';
@@ -23,6 +29,20 @@ export async function main(argv: string[]): Promise<void> {
     console.error(chalk.red('Error: print mode requires a message'));
     console.error(chalk.dim('Usage: harnext -p "your message"'));
     process.exit(1);
+  }
+
+  if (args.mode === 'heartbeat') {
+    if (!args.heartbeatName) {
+      console.error(chalk.red('Error: --heartbeat requires a name'));
+      console.error(chalk.dim('Usage: harnext --heartbeat <name>'));
+      process.exit(1);
+    }
+    const exitCode = await runHeartbeat(
+      args.cwd,
+      args.heartbeatName,
+      args.thinkingLevel as ThinkingLevel,
+    );
+    process.exit(exitCode);
   }
 
   // Resolve provider/model: CLI flags > saved preferences > provider's built-in default > fallback.
@@ -55,5 +75,57 @@ export async function main(argv: string[]): Promise<void> {
       provider,
       model,
     });
+  }
+}
+
+/**
+ * Cron entry point. Non-interactive, never prompts for auth — if auth isn't
+ * already stored, we record a failure record and exit 1.
+ */
+async function runHeartbeat(
+  cwd: string,
+  name: string,
+  thinkingLevel: ThinkingLevel,
+): Promise<number> {
+  const config = loadHeartbeatConfig(cwd, name);
+  if (!config) {
+    appendHeartbeatTick(cwd, name, {
+      ts: new Date().toISOString(),
+      exit: 1,
+      durationMs: 0,
+      prompt: '',
+      output: '',
+      error: `no heartbeat config for "${name}" in .harnext/heartbeats/`,
+    });
+    return 1;
+  }
+
+  const prefs = loadPreferences();
+  const resolvedProvider =
+    config.provider ?? prefs.defaultProvider ?? FALLBACK_PROVIDER;
+  const resolvedModel =
+    config.model ??
+    prefs.defaultModels?.[resolvedProvider] ??
+    getProviderById(resolvedProvider)?.defaultModel ??
+    FALLBACK_MODEL;
+
+  try {
+    const { session } = await createAgentSession({
+      provider: resolvedProvider,
+      modelId: resolvedModel,
+      cwd,
+      thinkingLevel,
+    });
+    return await runHeartbeatMode(session, { cwd, name, prompt: config.prompt });
+  } catch (err) {
+    appendHeartbeatTick(cwd, name, {
+      ts: new Date().toISOString(),
+      exit: 1,
+      durationMs: 0,
+      prompt: config.prompt,
+      output: '',
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return 1;
   }
 }
