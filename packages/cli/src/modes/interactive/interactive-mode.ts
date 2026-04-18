@@ -159,6 +159,25 @@ export async function runInteractiveMode(
   let markdown: MarkdownStreamer | null = null;
   let agentBusy = false;
 
+  // Assistant-text streaming state. `asstPendingNewlines` holds trailing
+  // newlines from recent chunks so we don't emit them yet — if the stream
+  // ends with more trailing newlines than we want, we just drop them.
+  // `asstAtLineStart` tracks whether the cursor is at column 0 of a fresh
+  // row, used by message_end to decide whether to emit a final '\n'.
+  let asstPendingNewlines = '';
+  let asstAtLineStart = true;
+
+  function processAsstChunk(styled: string): string {
+    if (styled.length === 0) return '';
+    const combined = asstPendingNewlines + styled;
+    const m = combined.match(/\n+$/);
+    const toWrite = m ? combined.slice(0, -m[0].length) : combined;
+    asstPendingNewlines = m ? m[0] : '';
+    if (toWrite.length === 0) return '';
+    asstAtLineStart = toWrite.endsWith('\n');
+    return toWrite;
+  }
+
   let spinnerPrefix = '';
   let spinnerMsg = '';
   let spinnerFrame = 0;
@@ -213,8 +232,6 @@ export async function runInteractiveMode(
     prompt: render.prompt(),
     getTopBorder: () => {
       const sep = render.separator(chalk.magenta);
-      // Leading blank row gives the textarea breathing room from whatever
-      // content sits directly above it (tool card, assistant text, etc.).
       const body = spinnerPrefix ? `${spinnerPrefix}\n${sep}` : sep;
       return `\n${body}`;
     },
@@ -233,6 +250,8 @@ export async function runInteractiveMode(
         if (event.message.role === 'assistant') {
           currentText = '';
           markdown = createMarkdownStreamer();
+          asstPendingNewlines = '';
+          asstAtLineStart = true;
           // Leading blank separates assistant text from whatever preceded
           // (user msg, tool-end card, or another assistant message).
           textarea.writeAbove('\n');
@@ -248,7 +267,8 @@ export async function runInteractiveMode(
         if (fullText.length > currentText.length) {
           const delta = fullText.slice(currentText.length);
           const styled = markdown ? markdown.feed(delta) : delta;
-          if (styled.length > 0) textarea.writeAbove(styled);
+          const out = processAsstChunk(styled);
+          if (out.length > 0) textarea.writeAbove(out);
           currentText = fullText;
         }
         break;
@@ -257,7 +277,13 @@ export async function runInteractiveMode(
       case 'message_end':
         if (event.message.role === 'assistant' && currentText.length > 0) {
           const tail = markdown ? markdown.flush() : '';
-          textarea.writeAbove(tail + '\n');
+          const out = processAsstChunk(tail);
+          if (out.length > 0) textarea.writeAbove(out);
+          // End the block on a fresh row (column 0). Buffered trailing
+          // newlines are discarded — the next card's top_pad provides the
+          // separator, so extra LLM newlines would just pile on as blank rows.
+          if (!asstAtLineStart) textarea.writeAbove('\n');
+          asstPendingNewlines = '';
         }
         markdown = null;
         break;
