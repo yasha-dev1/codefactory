@@ -8,6 +8,7 @@ import { getProviderConfig } from './auth.js';
 import { createCompaction } from './compaction.js';
 import type { CompactionOptions } from './compaction.js';
 import { buildOllamaModel, DEFAULT_OLLAMA_BASE_URL } from './ollama.js';
+import { seedBuiltinSkills } from './seed.js';
 import { loadSkills, type Skill } from './skills.js';
 import { buildSystemPrompt } from './system-prompt.js';
 import { createCodingTools, type Tool } from './tools/index.js';
@@ -68,11 +69,16 @@ export async function createAgentSession(
   // Build tools
   const tools = options.tools ?? createCodingTools(cwd);
 
-  // Load skills (project-local `<cwd>/.harnext/skills/`). SDK callers can pre-load and pass in.
+  // Load skills from project-local + user-wide dirs. SDK callers can pre-load and pass in.
+  // On first run, seed bundled starter skills into `~/.harnext/skills/` before loading.
   let skills: Skill[];
   if (options.skills) {
     skills = options.skills;
   } else {
+    const seed = seedBuiltinSkills();
+    for (const d of seed.diagnostics) {
+      console.warn(`[harnext] seed ${d.type}: ${d.message} (${d.path})`);
+    }
     const { skills: loaded, diagnostics } = loadSkills({ cwd });
     for (const d of diagnostics) {
       console.warn(`[harnext] skill ${d.type}: ${d.message} (${d.path})`);

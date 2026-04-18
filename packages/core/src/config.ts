@@ -16,3 +16,7 @@ export function getSessionsDir(): string {
 export function getProjectSkillsDir(cwd: string = process.cwd()): string {
   return join(cwd, CONFIG_DIR_NAME, 'skills');
 }
+
+export function getUserSkillsDir(): string {
+  return process.env.HARNEXT_USER_SKILLS_DIR ?? join(homedir(), CONFIG_DIR_NAME, 'skills');
+}

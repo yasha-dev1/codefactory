@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'n
 import type { Dirent } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 
-import { CONFIG_DIR_NAME, getProjectSkillsDir } from './config.js';
+import { CONFIG_DIR_NAME, getProjectSkillsDir, getUserSkillsDir } from './config.js';
 import { parseFrontmatter } from './utils/frontmatter.js';
 
 const MAX_NAME_LENGTH = 64;
@@ -198,42 +198,46 @@ function loadSkillsFromDirInternal(dir: string, includeRootFiles: boolean): Load
 }
 
 /**
- * Load skills from the project-local `<cwd>/.harnext/skills/` directory.
- * Dedupes by name (first-match wins) and by resolved real path (for symlinks).
+ * Load skills from both the project-local `<cwd>/.harnext/skills/` and the
+ * user-wide `~/.harnext/skills/` directories. Project skills are scanned first,
+ * so they win on name collisions (first-match-wins). Deduped by resolved real
+ * path to handle symlinks.
  */
 export function loadSkills(options: LoadSkillsOptions = {}): LoadSkillsResult {
   const cwd = options.cwd ?? process.cwd();
-  const skillsDir = getProjectSkillsDir(cwd);
 
   const skillMap = new Map<string, Skill>();
   const realPathSet = new Set<string>();
   const diagnostics: SkillDiagnostic[] = [];
 
-  const { skills, diagnostics: loadDiagnostics } = loadSkillsFromDirInternal(skillsDir, true);
-  diagnostics.push(...loadDiagnostics);
+  const dirs = [getProjectSkillsDir(cwd), getUserSkillsDir()];
+  for (const dir of dirs) {
+    const { skills, diagnostics: loadDiagnostics } = loadSkillsFromDirInternal(dir, true);
+    diagnostics.push(...loadDiagnostics);
 
-  for (const skill of skills) {
-    let realPath: string;
-    try {
-      realPath = realpathSync(skill.filePath);
-    } catch {
-      realPath = skill.filePath;
+    for (const skill of skills) {
+      let realPath: string;
+      try {
+        realPath = realpathSync(skill.filePath);
+      } catch {
+        realPath = skill.filePath;
+      }
+
+      if (realPathSet.has(realPath)) continue;
+
+      const existing = skillMap.get(skill.name);
+      if (existing) {
+        diagnostics.push({
+          type: 'collision',
+          message: `skill name "${skill.name}" collision; keeping ${existing.filePath}`,
+          path: skill.filePath,
+        });
+        continue;
+      }
+
+      skillMap.set(skill.name, skill);
+      realPathSet.add(realPath);
     }
-
-    if (realPathSet.has(realPath)) continue;
-
-    const existing = skillMap.get(skill.name);
-    if (existing) {
-      diagnostics.push({
-        type: 'collision',
-        message: `skill name "${skill.name}" collision; keeping ${existing.filePath}`,
-        path: skill.filePath,
-      });
-      continue;
-    }
-
-    skillMap.set(skill.name, skill);
-    realPathSet.add(realPath);
   }
 
   return { skills: Array.from(skillMap.values()), diagnostics };

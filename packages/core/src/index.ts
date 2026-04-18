@@ -5,7 +5,14 @@ export {
   getAgentDir,
   getSessionsDir,
   getProjectSkillsDir,
+  getUserSkillsDir,
 } from './config.js';
+
+export {
+  seedBuiltinSkills,
+  getBundledSkillsDir,
+  type SeedResult,
+} from './seed.js';
 
 export {
   loadSkills,
