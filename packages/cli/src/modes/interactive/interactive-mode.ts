@@ -1,4 +1,5 @@
 import type { AgentEvent } from '@mariozechner/pi-agent-core';
+import { compactNow, estimateTotalTokens } from '@harnext/core';
 import chalk from 'chalk';
 
 import { readInput } from '../../cli/input.js';
@@ -41,6 +42,33 @@ const SLASH_COMMANDS: SlashCommand[] = [
         );
       } else {
         console.log(chalk.dim('  Cancelled.'));
+      }
+      console.log();
+      return true;
+    },
+  },
+  {
+    name: '/compact',
+    description: 'Compact conversation history',
+    action: async (ctx) => {
+      const spinner = render.startSpinner('Compacting...');
+      try {
+        const result = await compactNow(ctx.session.agent);
+        spinner.stop();
+        if (result.compacted) {
+          console.log(
+            chalk.green('  Compacted: ') +
+              chalk.dim(
+                `${result.originalMessages} → ${result.newMessages} messages, ` +
+                  `~${result.originalTokens} → ~${result.compactedTokens} tokens`,
+              ),
+          );
+        } else {
+          console.log(chalk.dim('  Not enough messages to compact.'));
+        }
+      } catch {
+        spinner.stop();
+        console.log(chalk.red('  Compaction failed.'));
       }
       console.log();
       return true;
@@ -189,7 +217,10 @@ export async function runInteractiveMode(
   // ── Main input loop (raw mode) ───────────────────────────────────
   while (true) {
     const topBorder = render.separator(chalk.magenta);
-    const bottomBorder = render.inputFooter(activeProvider, activeModel, cwd);
+    const ctxTokens = estimateTotalTokens(session.messages);
+    const ctxWindow = session.agent.state.model.contextWindow;
+    const ctxPercent = ctxWindow ? (ctxTokens / ctxWindow) * 100 : undefined;
+    const bottomBorder = render.inputFooter(activeProvider, activeModel, cwd, ctxPercent);
     const completions = SLASH_COMMANDS.map((cmd) => ({ text: cmd.name, hint: cmd.description }));
     const result = await readInput(render.prompt(), { topBorder, bottomBorder, completions });
 

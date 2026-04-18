@@ -15,6 +15,14 @@ export {
 export { buildSystemPrompt, type BuildSystemPromptOptions } from './system-prompt.js';
 
 export {
+  createCompaction,
+  compactNow,
+  estimateTotalTokens,
+  type CompactionOptions,
+  type CompactNowResult,
+} from './compaction.js';
+
+export {
   loadAuth,
   saveProviderKey,
   getStoredKey,

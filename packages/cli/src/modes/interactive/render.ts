@@ -177,14 +177,20 @@ function getGitBranch(): string {
   return cachedBranch;
 }
 
-export function inputFooter(provider: string, model: string, cwd: string): string {
+export function inputFooter(
+  provider: string,
+  model: string,
+  cwd: string,
+  contextPercent?: number,
+): string {
   const w = termWidth();
   const home = process.env.HOME ?? '';
   const shortCwd = home && cwd.startsWith(home) ? '~' + cwd.slice(home.length) : cwd;
   const branch = getGitBranch();
   const branchStr = branch ? ` (${branch})` : '';
 
-  const left = `${shortCwd}${branchStr}`;
+  const ctxStr = contextPercent != null ? ` ${Math.round(contextPercent)}%` : '';
+  const left = `${shortCwd}${branchStr}${ctxStr}`;
   const right = `${provider}/${model}`;
   // ─ left ──────── right ─
   const middleLen = Math.max(0, w - 6 - left.length - right.length);

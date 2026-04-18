@@ -4,6 +4,8 @@ import { getModel, streamSimple } from '@mariozechner/pi-ai';
 import type { KnownProvider, Message, Model } from '@mariozechner/pi-ai';
 
 import { AgentSession } from './agent-session.js';
+import { createCompaction } from './compaction.js';
+import type { CompactionOptions } from './compaction.js';
 import { buildSystemPrompt } from './system-prompt.js';
 import { createCodingTools, type Tool } from './tools/index.js';
 
@@ -22,6 +24,8 @@ export interface CreateAgentSessionOptions {
   thinkingLevel?: ThinkingLevel;
   /** Custom tools (overrides default coding tools) */
   tools?: Tool[];
+  /** Compaction options (set to false to disable) */
+  compaction?: CompactionOptions | false;
 }
 
 export interface CreateAgentSessionResult {
@@ -57,6 +61,10 @@ export async function createAgentSession(
     customPrompt: options.systemPrompt,
   });
 
+  // Set up compaction (enabled by default)
+  const transformContext =
+    options.compaction !== false ? createCompaction(model, options.compaction ?? {}) : undefined;
+
   // Create the agent
   const agent = new Agent({
     initialState: {
@@ -66,6 +74,7 @@ export async function createAgentSession(
       tools,
     },
     convertToLlm,
+    transformContext,
     streamFn: async (m, ctx, opts) => {
       return streamSimple(m, ctx, opts);
     },
