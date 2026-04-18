@@ -5,7 +5,7 @@ import chalk, { type ChalkInstance } from 'chalk';
 import { APP_NAME, VERSION } from '@harnext/core';
 
 // ── Box-drawing characters ───────────────────────────────────────────
-const BOX = { tl: '┌', tr: '┐', bl: '└', br: '┘', h: '─', v: '│' } as const;
+const BOX = { h: '─' } as const;
 
 function termWidth(): number {
   return process.stdout.columns || 80;
@@ -17,49 +17,98 @@ export function separator(color: ChalkInstance = chalk.dim): string {
   return color(BOX.h.repeat(termWidth()));
 }
 
-// ── Bordered box ─────────────────────────────────────────────────────
+// ── Tinted card (subtle background, no border) ──────────────────────
 
-export interface BoxOptions {
-  title?: string;
-  borderColor: ChalkInstance;
-  titleColor?: ChalkInstance;
+type Tint = 'yellow' | 'green' | 'red';
+
+// Low-saturation backgrounds that read as colored blocks on both dark and
+// light terminals while keeping white/dim text legible on top.
+const CARD_BG: Record<Tint, ChalkInstance> = {
+  yellow: chalk.bgRgb(60, 50, 18),
+  green: chalk.bgRgb(25, 48, 28),
+  red: chalk.bgRgb(62, 26, 26),
+};
+
+const CARD_TITLE: Record<Tint, ChalkInstance> = {
+  yellow: chalk.yellow.bold,
+  green: chalk.green.bold,
+  red: chalk.red.bold,
+};
+
+export interface CardOptions {
+  title: string;
+  tint: Tint;
   maxLines?: number;
 }
 
-export function box(content: string, options: BoxOptions): string {
-  const w = termWidth();
-  const innerW = w - 4;
-  const { borderColor, titleColor = chalk.bold } = options;
+// Non-tinted space between the terminal edge and the card.
+const CARD_MARGIN_X = 2;
+// Tinted space between the card edge and its content.
+const CARD_PAD_X = 3;
 
-  let top: string;
-  if (options.title) {
-    const titleStr = ` ${options.title} `;
-    const remaining = w - 2 - titleStr.length;
-    top =
-      borderColor(BOX.tl + BOX.h) +
-      titleColor(titleStr) +
-      borderColor(BOX.h.repeat(Math.max(0, remaining)) + BOX.tr);
-  } else {
-    top = borderColor(BOX.tl + BOX.h.repeat(w - 2) + BOX.tr);
-  }
+export function card(content: string, options: CardOptions): string {
+  const termW = termWidth();
+  const cardW = Math.max(4, termW - CARD_MARGIN_X * 2);
+  const innerW = Math.max(1, cardW - CARD_PAD_X * 2);
+  const bg = CARD_BG[options.tint];
+  const titleFg = CARD_TITLE[options.tint];
+  const marginLeft = ' '.repeat(CARD_MARGIN_X);
+
+  // Wrap one pre-fit content line into a full card row:
+  // [margin] [tinted pad | content | right pad | tinted pad] [margin].
+  const row = (body: string, visibleLen: number): string => {
+    const pad = Math.max(0, innerW - visibleLen);
+    return (
+      marginLeft +
+      bg(' '.repeat(CARD_PAD_X) + body + ' '.repeat(pad) + ' '.repeat(CARD_PAD_X))
+    );
+  };
+
+  const out: string[] = [];
+  const blank = row('', 0);
+
+  // Blank tinted line — top padding inside the card.
+  out.push(blank);
+
+  // Title — truncated if somehow wider than the card.
+  const titleText = fitToWidth(options.title, innerW);
+  out.push(row(titleFg(titleText), titleText.length));
 
   let lines = content.split('\n');
+  // Trim trailing empty lines — tool outputs often end in `\n`, which would
+  // otherwise render as a bare ANSI close-code row inside the card, stacking
+  // a visible blank row against the card's own bottom padding.
+  while (lines.length > 0 && stripAnsi(lines[lines.length - 1]).trim() === '') {
+    lines.pop();
+  }
   if (options.maxLines && lines.length > options.maxLines) {
     lines = lines.slice(0, options.maxLines);
-    lines.push(chalk.dim(`... (truncated)`));
+    lines.push(chalk.dim('... (truncated)'));
   }
 
-  const body = lines
-    .map((line) => {
-      const stripped = stripAnsi(line);
-      const pad = Math.max(0, innerW - stripped.length);
-      return borderColor(BOX.v) + ' ' + line + ' '.repeat(pad) + ' ' + borderColor(BOX.v);
-    })
-    .join('\n');
+  // Each content line is fit to innerW so the terminal never wraps it and
+  // bleeds the tint into column 0 of the next row.
+  for (const line of lines) {
+    const visible = stripAnsi(line);
+    if (visible.length <= innerW) {
+      out.push(row(line, visible.length));
+    } else {
+      // Drop ANSI on overflow lines rather than risk slicing inside an escape.
+      const fit = fitToWidth(visible, innerW);
+      out.push(row(fit, fit.length));
+    }
+  }
 
-  const bottom = borderColor(BOX.bl + BOX.h.repeat(w - 2) + BOX.br);
+  // Intentionally no bottom padding row: the *next* card's top padding is
+  // what separates adjacent cards. Having both would stack two colored
+  // blank rows at each boundary and read as extra whitespace.
+  return out.join('\n');
+}
 
-  return top + '\n' + body + '\n' + bottom;
+function fitToWidth(text: string, maxVisible: number): string {
+  if (text.length <= maxVisible) return text;
+  if (maxVisible <= 1) return text.slice(0, maxVisible);
+  return text.slice(0, Math.max(0, maxVisible - 1)) + '…';
 }
 
 // ── User message ─────────────────────────────────────────────────────
@@ -80,11 +129,7 @@ export function userMessage(text: string): string {
 
 export function toolStart(name: string, args: Record<string, unknown>): string {
   const summary = formatToolSummary(name, args);
-  return box(chalk.dim(summary), {
-    title: name,
-    borderColor: chalk.yellow,
-    titleColor: chalk.yellow.bold,
-  });
+  return card(chalk.white(summary), { title: name, tint: 'yellow' });
 }
 
 export function toolEnd(
@@ -93,21 +138,21 @@ export function toolEnd(
   result: string,
   isError: boolean,
 ): string {
-  const borderColor = isError ? chalk.red : chalk.green;
+  const tint: Tint = isError ? 'red' : 'green';
   const summary = formatToolSummary(name, args);
-  const lines: string[] = [chalk.dim(summary)];
+  const lines: string[] = [chalk.white(summary)];
 
-  // Show diff for edit tool
+  // Show diff for edit tool. Bright variants stand out on the card bg.
   if (name === 'edit' && !isError) {
     const oldStr = args.old_string as string | undefined;
     const newStr = args.new_string as string | undefined;
     if (oldStr && newStr) {
       lines.push('');
       for (const line of oldStr.split('\n')) {
-        lines.push(chalk.red('- ' + line));
+        lines.push(chalk.redBright('- ' + line));
       }
       for (const line of newStr.split('\n')) {
-        lines.push(chalk.green('+ ' + line));
+        lines.push(chalk.greenBright('+ ' + line));
       }
     }
   }
@@ -118,19 +163,19 @@ export function toolEnd(
     if (content) {
       const lineCount = content.split('\n').length;
       lines.push('');
-      lines.push(chalk.green(`+ ${lineCount} lines written`));
+      lines.push(chalk.greenBright(`+ ${lineCount} lines written`));
     }
   }
 
   if (result.length > 0) {
     lines.push('');
-    lines.push(isError ? chalk.red(result) : chalk.dim(result));
+    // White fg keeps error output readable against the red tint.
+    lines.push(isError ? chalk.white(result) : chalk.white(result));
   }
 
-  return box(lines.join('\n'), {
+  return card(lines.join('\n'), {
     title: isError ? `${name} (error)` : name,
-    borderColor,
-    titleColor: isError ? chalk.red.bold : chalk.green.bold,
+    tint,
     maxLines: 25,
   });
 }
@@ -190,12 +235,19 @@ export function inputFooter(
   const branchStr = branch ? ` (${branch})` : '';
 
   const ctxStr = contextPercent != null ? ` ${Math.round(contextPercent)}%` : '';
-  const left = `${shortCwd}${branchStr}${ctxStr}`;
-  const right = `${provider}/${model}`;
-
+  const rightRaw = `${provider}/${model}`;
+  // Right-align `rightRaw`; give `leftRaw` whatever is left (min 1 gap).
+  // Truncate left side with an ellipsis if it overflows, so the info line
+  // never wraps (a wrap breaks the textarea's row accounting).
+  const rightFit = rightRaw.length >= w ? rightRaw.slice(-(w - 1)) : rightRaw;
+  const leftBudget = Math.max(0, w - rightFit.length - 1);
+  let leftRaw = `${shortCwd}${branchStr}${ctxStr}`;
+  if (leftRaw.length > leftBudget) {
+    leftRaw = leftBudget <= 1 ? leftRaw.slice(0, leftBudget) : '…' + leftRaw.slice(-(leftBudget - 1));
+  }
+  const gap = Math.max(1, w - leftRaw.length - rightFit.length);
   const border = chalk.magenta('─'.repeat(w));
-  const gap = Math.max(1, w - left.length - right.length);
-  const infoLine = chalk.dim(left) + ' '.repeat(gap) + chalk.dim(right);
+  const infoLine = chalk.dim(leftRaw) + ' '.repeat(gap) + chalk.dim(rightFit);
 
   return border + '\n' + infoLine;
 }
@@ -238,10 +290,19 @@ export interface Spinner {
 }
 
 export function startSpinner(message?: string): Spinner {
+  const CYCLE_MS = 3000;
+  const cycling = message == null;
   let frame = 0;
-  const msg = message ?? randomMessage();
+  let msg = message ?? randomMessage();
+  let lastCycle = Date.now();
 
   const interval = setInterval(() => {
+    if (cycling && Date.now() - lastCycle >= CYCLE_MS) {
+      let next = randomMessage();
+      while (next === msg && LOADING_MESSAGES.length > 1) next = randomMessage();
+      msg = next;
+      lastCycle = Date.now();
+    }
     const spinner = chalk.cyan(SPINNER_FRAMES[frame % SPINNER_FRAMES.length]);
     const text = chalk.dim(msg);
     process.stdout.write(`\r\x1B[K  ${spinner} ${text}`);
