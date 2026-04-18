@@ -1,0 +1,31 @@
+{
+  "name": "@harnext/core",
+  "version": "0.1.0",
+  "description": "Core library for harnext AI coding agent",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@mariozechner/pi-agent-core": "^0.67.68",
+    "@mariozechner/pi-ai": "^0.67.68",
+    "@sinclair/typebox": "^0.34.41"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}
