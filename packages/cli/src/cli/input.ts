@@ -76,9 +76,38 @@ export function createTextarea(options: TextareaOptions): Textarea {
   // (e.g. a spinner line appearing) between draws.
   let lastTopLines = 0;
   let lastBottomLines = 0;
+  // Index into the current matches list for the inline completion panel.
+  // Always clamped to [0, matches.length) at render time.
+  let selectedCompletionIdx = 0;
 
   const promptStr = options.prompt;
   const promptVisibleLen = stripAnsi(promptStr).length;
+
+  function getMatchingCompletions(): CompletionItem[] {
+    if (!options.completions || buffer.length === 0) return [];
+    if (!buffer.startsWith('/')) return [];
+    const lower = buffer.toLowerCase();
+    return options.completions.filter((c) => c.text.toLowerCase().startsWith(lower));
+  }
+
+  // Panel rendered below the bottom border when the user is typing a
+  // slash command. Shows matches with hints and a cyan chevron on the
+  // currently-selected row; up/down navigate, tab/enter complete.
+  function renderCompletionsPanel(): string {
+    const matches = getMatchingCompletions();
+    if (matches.length === 0) return '';
+    if (selectedCompletionIdx >= matches.length) selectedCompletionIdx = 0;
+    const rows: string[] = [''];
+    for (let i = 0; i < matches.length; i++) {
+      const m = matches[i];
+      const sel = i === selectedCompletionIdx;
+      const chevron = sel ? `${ESC}36m❯${ESC}39m ` : '  ';
+      const name = sel ? `${ESC}36m${ESC}1m${m.text}${ESC}22m${ESC}39m` : m.text;
+      const hint = m.hint ? `  ${ESC}2m${m.hint}${ESC}22m` : '';
+      rows.push('  ' + chevron + name + hint);
+    }
+    return rows.join('\n');
+  }
 
   function clearGhost() {
     if (!hasTTY || ghostLen === 0) return;
@@ -87,10 +116,9 @@ export function createTextarea(options: TextareaOptions): Textarea {
   }
 
   function drawGhost() {
-    if (!hasTTY || !options.completions || buffer.length === 0) return;
-    const match = options.completions.find((c) =>
-      c.text.toLowerCase().startsWith(buffer.toLowerCase()),
-    );
+    if (!hasTTY || buffer.length === 0) return;
+    const matches = getMatchingCompletions();
+    const match = matches[selectedCompletionIdx] ?? matches[0];
     if (match && match.text !== buffer) {
       const rest = match.text.slice(buffer.length);
       process.stdout.write(`${ESC}2m${rest}${ESC}22m`);
@@ -138,6 +166,12 @@ export function createTextarea(options: TextareaOptions): Textarea {
       process.stdout.write('\n');
       process.stdout.write(bot);
       lastBottomLines = countLines(bot);
+      const panel = renderCompletionsPanel();
+      if (panel) {
+        process.stdout.write('\n');
+        process.stdout.write(panel);
+        lastBottomLines += countLines(panel);
+      }
       if (lastBottomLines > 0) process.stdout.write(`${ESC}${lastBottomLines}A`);
     } else {
       lastBottomLines = 0;
@@ -202,10 +236,15 @@ export function createTextarea(options: TextareaOptions): Textarea {
     if (!textareaDrawn) drawTextarea();
 
     if (key.name === 'return') {
-      const value = buffer.trim();
+      // If the inline panel is open, submit the selected command verbatim
+      // (so partial input like "/co" submits as "/compact"). Otherwise
+      // submit the buffer as-is.
+      const matches = getMatchingCompletions();
+      const chosen = matches[selectedCompletionIdx];
+      const value = chosen ? chosen.text : buffer.trim();
       clearGhost();
       buffer = '';
-      // Reset the input line to just the prompt, in place.
+      selectedCompletionIdx = 0;
       process.stdout.write('\r');
       process.stdout.write(`${ESC}K`);
       process.stdout.write(promptStr);
@@ -213,35 +252,56 @@ export function createTextarea(options: TextareaOptions): Textarea {
       return;
     }
 
-    if (key.name === 'tab' && options.completions && buffer.length > 0) {
-      const match = options.completions.find((c) =>
-        c.text.toLowerCase().startsWith(buffer.toLowerCase()),
-      );
+    if (key.name === 'tab' && buffer.length > 0) {
+      const matches = getMatchingCompletions();
+      const match = matches[selectedCompletionIdx] ?? matches[0];
       if (match && match.text !== buffer) {
-        clearGhost();
-        const extra = match.text.slice(buffer.length);
         buffer = match.text;
-        process.stdout.write(extra);
-        drawGhost();
+        selectedCompletionIdx = 0;
+        redraw();
+      }
+      return;
+    }
+
+    if (key.name === 'up' || key.name === 'down') {
+      const matches = getMatchingCompletions();
+      if (matches.length > 1) {
+        selectedCompletionIdx =
+          key.name === 'up'
+            ? (selectedCompletionIdx - 1 + matches.length) % matches.length
+            : (selectedCompletionIdx + 1) % matches.length;
+        redraw();
       }
       return;
     }
 
     if (key.name === 'backspace') {
       if (buffer.length > 0) {
-        clearGhost();
+        const wasSlash = buffer.startsWith('/');
         buffer = buffer.slice(0, -1);
-        process.stdout.write('\b \b');
-        drawGhost();
+        selectedCompletionIdx = 0;
+        if (wasSlash || buffer.startsWith('/')) {
+          redraw();
+        } else {
+          clearGhost();
+          process.stdout.write('\b \b');
+          drawGhost();
+        }
       }
       return;
     }
 
     if (str && str.length === 1 && !key.ctrl && !key.meta && str.charCodeAt(0) >= 32) {
-      clearGhost();
+      const wasSlash = buffer.startsWith('/');
       buffer += str;
-      process.stdout.write(str);
-      drawGhost();
+      selectedCompletionIdx = 0;
+      if (wasSlash || buffer.startsWith('/')) {
+        redraw();
+      } else {
+        clearGhost();
+        process.stdout.write(str);
+        drawGhost();
+      }
     }
   };
 

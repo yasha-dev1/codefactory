@@ -30,6 +30,7 @@ interface CommandContext {
   getProvider: () => string;
   getModel: () => string;
   setModel: (provider: string, modelId: string, model: unknown) => void;
+  clearSession: () => void;
 }
 
 const SLASH_COMMANDS: SlashCommand[] = [
@@ -75,6 +76,14 @@ const SLASH_COMMANDS: SlashCommand[] = [
         console.log(chalk.red('  Compaction failed.'));
       }
       console.log();
+      return true;
+    },
+  },
+  {
+    name: '/clear',
+    description: 'Clear conversation and start a new session',
+    action: async (ctx) => {
+      ctx.clearSession();
       return true;
     },
   },
@@ -318,6 +327,23 @@ export async function runInteractiveMode(
       activeModel = modelId;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       session.agent.state.model = model as any;
+    },
+    clearSession: () => {
+      try {
+        session.agent.abort();
+      } catch {
+        // no active run — nothing to abort
+      }
+      session.agent.reset();
+      pendingToolArgs.clear();
+      currentText = '';
+      markdown = null;
+      asstPendingNewlines = '';
+      asstAtLineStart = true;
+      // Clear the visible screen (ESC[2J) and move cursor home (ESC[H),
+      // then reprint the static header so the session starts fresh.
+      process.stdout.write('\x1B[2J\x1B[H');
+      process.stdout.write(render.header());
     },
   };
 
