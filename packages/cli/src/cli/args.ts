@@ -4,8 +4,10 @@ export type Mode = 'interactive' | 'print';
 
 export interface Args {
   mode: Mode;
-  provider: string;
-  model: string;
+  /** Undefined if not passed on the command line — resolved later from saved preferences. */
+  provider?: string;
+  /** Undefined if not passed on the command line — resolved later from saved preferences. */
+  model?: string;
   thinkingLevel: string;
   systemPrompt?: string;
   cwd: string;
@@ -15,8 +17,6 @@ export interface Args {
 export function parseArgs(argv: string[]): Args {
   const args: Args = {
     mode: 'interactive',
-    provider: 'anthropic',
-    model: 'claude-sonnet-4-6',
     thinkingLevel: 'off',
     cwd: process.cwd(),
     messages: [],

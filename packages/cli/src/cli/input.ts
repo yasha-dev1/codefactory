@@ -82,9 +82,10 @@ export async function readInput(promptStr: string, options?: InputOptions): Prom
       }
     }
 
-    // Bottom border
+    // Bottom border (may span multiple lines)
     if (options?.bottomBorder) {
       process.stdout.write(options.bottomBorder);
+      linesDown += (options.bottomBorder.match(/\n/g) || []).length;
     }
 
     // Move cursor back to input line using relative movement

@@ -12,6 +12,7 @@ import {
   PROVIDERS,
   saveProviderConfig,
   saveProviderKey,
+  setDefault,
   setProviderEnv,
 } from '@harnext/core';
 import type { ProviderInfo } from '@harnext/core';
@@ -86,6 +87,7 @@ async function runOnboarding(): Promise<{ provider: string; model: string }> {
 
   if (provider.local) {
     const { model } = await onboardLocalProvider(provider);
+    setDefault(provider.id, model);
     return { provider: provider.id, model };
   }
 
@@ -103,6 +105,7 @@ async function runOnboarding(): Promise<{ provider: string; model: string }> {
     // Ignore — fall back to default model.
   }
 
+  setDefault(provider.id, modelId);
   console.log(chalk.green(`\n  Saved! Using ${provider.name} / ${modelId}\n`));
   return { provider: provider.id, model: modelId };
 }

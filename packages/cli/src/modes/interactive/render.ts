@@ -163,7 +163,7 @@ export function header(): string {
   return lines.join('\n');
 }
 
-// ── Input footer (info embedded in bottom border) ───────────────────
+// ── Input footer (plain border, info on the line below) ─────────────
 
 let cachedBranch: string | undefined;
 
@@ -192,20 +192,12 @@ export function inputFooter(
   const ctxStr = contextPercent != null ? ` ${Math.round(contextPercent)}%` : '';
   const left = `${shortCwd}${branchStr}${ctxStr}`;
   const right = `${provider}/${model}`;
-  // ─ left ──────── right ─
-  const middleLen = Math.max(0, w - 6 - left.length - right.length);
 
-  return (
-    chalk.magenta('─') +
-    ' ' +
-    chalk.dim(left) +
-    ' ' +
-    chalk.magenta('─'.repeat(middleLen)) +
-    ' ' +
-    chalk.dim(right) +
-    ' ' +
-    chalk.magenta('─')
-  );
+  const border = chalk.magenta('─'.repeat(w));
+  const gap = Math.max(1, w - left.length - right.length);
+  const infoLine = chalk.dim(left) + ' '.repeat(gap) + chalk.dim(right);
+
+  return border + '\n' + infoLine;
 }
 
 // ── Prompt ───────────────────────────────────────────────────────────

@@ -42,6 +42,16 @@ export {
 } from './ollama.js';
 
 export {
+  loadPreferences,
+  savePreferences,
+  setDefaultProvider,
+  setDefaultModel,
+  getDefaultModel,
+  setDefault,
+  type Preferences,
+} from './preferences.js';
+
+export {
   PROVIDERS,
   getProviderById,
   setProviderEnv,

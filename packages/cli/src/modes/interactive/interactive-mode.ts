@@ -1,5 +1,5 @@
 import type { AgentEvent } from '@mariozechner/pi-agent-core';
-import { compactNow, estimateTotalTokens } from '@harnext/core';
+import { compactNow, estimateTotalTokens, setDefault } from '@harnext/core';
 import chalk from 'chalk';
 
 import { readInput } from '../../cli/input.js';
@@ -37,6 +37,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
       const result = await pickModel();
       if (result) {
         ctx.setModel(result.provider, result.model.id, result.model);
+        setDefault(result.provider, result.model.id);
         console.log(
           chalk.green('  Switched to ') + chalk.bold(`${result.provider}/${result.model.id}`),
         );

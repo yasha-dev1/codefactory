@@ -10,8 +10,11 @@ import chalk from 'chalk';
 
 import { parseArgs } from './cli/args.js';
 import { ensureAuth } from './cli/onboarding.js';
-import { createAgentSession } from '@harnext/core';
+import { createAgentSession, getProviderById, loadPreferences } from '@harnext/core';
 import { runInteractiveMode, runPrintMode } from './modes/index.js';
+
+const FALLBACK_PROVIDER = 'anthropic';
+const FALLBACK_MODEL = 'claude-sonnet-4-6';
 
 export async function main(argv: string[]): Promise<void> {
   const args = parseArgs(argv);
@@ -22,8 +25,17 @@ export async function main(argv: string[]): Promise<void> {
     process.exit(1);
   }
 
+  // Resolve provider/model: CLI flags > saved preferences > provider's built-in default > fallback.
+  const prefs = loadPreferences();
+  const resolvedProvider = args.provider ?? prefs.defaultProvider ?? FALLBACK_PROVIDER;
+  const resolvedModel =
+    args.model ??
+    prefs.defaultModels?.[resolvedProvider] ??
+    getProviderById(resolvedProvider)?.defaultModel ??
+    FALLBACK_MODEL;
+
   // Resolve auth — onboards if no API key is found
-  const { provider, model } = await ensureAuth(args.provider, args.model);
+  const { provider, model } = await ensureAuth(resolvedProvider, resolvedModel);
 
   const { session } = await createAgentSession({
     provider,
