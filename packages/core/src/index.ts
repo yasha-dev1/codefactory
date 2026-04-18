@@ -25,10 +25,21 @@ export {
 export {
   loadAuth,
   saveProviderKey,
+  saveProviderConfig,
+  getProviderConfig,
   getStoredKey,
   listStoredProviders,
   type AuthData,
+  type AuthEntry,
 } from './auth.js';
+
+export {
+  buildOllamaModel,
+  listOllamaModels,
+  normalizeOllamaBaseUrl,
+  DEFAULT_OLLAMA_BASE_URL,
+  type OllamaModelSummary,
+} from './ollama.js';
 
 export {
   PROVIDERS,

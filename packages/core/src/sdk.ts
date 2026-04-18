@@ -4,8 +4,10 @@ import { getModel, streamSimple } from '@mariozechner/pi-ai';
 import type { KnownProvider, Message, Model } from '@mariozechner/pi-ai';
 
 import { AgentSession } from './agent-session.js';
+import { getProviderConfig } from './auth.js';
 import { createCompaction } from './compaction.js';
 import type { CompactionOptions } from './compaction.js';
+import { buildOllamaModel, DEFAULT_OLLAMA_BASE_URL } from './ollama.js';
 import { buildSystemPrompt } from './system-prompt.js';
 import { createCodingTools, type Tool } from './tools/index.js';
 
@@ -46,10 +48,18 @@ export async function createAgentSession(
   const cwd = options.cwd ?? process.cwd();
   const thinkingLevel: ThinkingLevel = options.thinkingLevel ?? 'off';
 
-  // Resolve model from registry
-  const model = getModel(provider as KnownProvider, modelId as never) as Model<string>;
-  if (!model) {
-    throw new Error(`Unknown model "${modelId}" for provider "${provider}".`);
+  // Resolve model: ollama uses a custom Model built from stored baseUrl;
+  // all other providers come from the pi-ai registry.
+  let model: Model<string>;
+  if (provider === 'ollama') {
+    const baseUrl = getProviderConfig('ollama')?.baseUrl ?? DEFAULT_OLLAMA_BASE_URL;
+    model = buildOllamaModel(modelId, baseUrl) as Model<string>;
+  } else {
+    const registryModel = getModel(provider as KnownProvider, modelId as never) as Model<string>;
+    if (!registryModel) {
+      throw new Error(`Unknown model "${modelId}" for provider "${provider}".`);
+    }
+    model = registryModel;
   }
 
   // Build tools
@@ -76,7 +86,9 @@ export async function createAgentSession(
     convertToLlm,
     transformContext,
     streamFn: async (m, ctx, opts) => {
-      return streamSimple(m, ctx, opts);
+      // Ollama needs a non-empty API key placeholder for the OpenAI-compatible client.
+      const finalOpts = m.provider === 'ollama' ? { ...opts, apiKey: opts?.apiKey ?? 'ollama' } : opts;
+      return streamSimple(m, ctx, finalOpts);
     },
     toolExecution: 'parallel',
   });

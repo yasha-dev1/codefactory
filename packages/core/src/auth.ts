@@ -3,8 +3,13 @@ import { dirname, join } from 'node:path';
 
 import { getAgentDir } from './config.js';
 
+export interface AuthEntry {
+  key?: string;
+  baseUrl?: string;
+}
+
 export interface AuthData {
-  [provider: string]: { key: string };
+  [provider: string]: AuthEntry;
 }
 
 function getAuthPath(): string {
@@ -21,15 +26,29 @@ export function loadAuth(): AuthData {
   }
 }
 
-export function saveProviderKey(provider: string, key: string): void {
+function writeAuth(data: AuthData): void {
   const path = getAuthPath();
   const dir = dirname(path);
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
   }
-  const data = loadAuth();
-  data[provider] = { key };
   writeFileSync(path, JSON.stringify(data, null, 2) + '\n', { mode: 0o600 });
+}
+
+export function saveProviderKey(provider: string, key: string): void {
+  const data = loadAuth();
+  data[provider] = { ...data[provider], key };
+  writeAuth(data);
+}
+
+export function saveProviderConfig(provider: string, config: AuthEntry): void {
+  const data = loadAuth();
+  data[provider] = { ...data[provider], ...config };
+  writeAuth(data);
+}
+
+export function getProviderConfig(provider: string): AuthEntry | undefined {
+  return loadAuth()[provider];
 }
 
 export function getStoredKey(provider: string): string | undefined {

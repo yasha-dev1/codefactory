@@ -2,8 +2,20 @@ import { createInterface } from 'node:readline';
 
 import chalk from 'chalk';
 
-import { getProviderById, getStoredKey, PROVIDERS, saveProviderKey, setProviderEnv } from '@harnext/core';
+import {
+  DEFAULT_OLLAMA_BASE_URL,
+  getProviderById,
+  getProviderConfig,
+  getStoredKey,
+  listOllamaModels,
+  normalizeOllamaBaseUrl,
+  PROVIDERS,
+  saveProviderConfig,
+  saveProviderKey,
+  setProviderEnv,
+} from '@harnext/core';
 import type { ProviderInfo } from '@harnext/core';
+import { selectModel } from './model-picker.js';
 import { select } from './select.js';
 import type { SelectItem } from './select.js';
 
@@ -12,15 +24,17 @@ import type { SelectItem } from './select.js';
  * Returns the key if found (env var or stored), or undefined.
  */
 export function resolveApiKey(provider: ProviderInfo): string | undefined {
-  const envKey = process.env[provider.envVar];
-  if (envKey) return envKey;
+  if (provider.envVar) {
+    const envKey = process.env[provider.envVar];
+    if (envKey) return envKey;
+  }
   return getStoredKey(provider.id);
 }
 
 /**
- * Ensure the target provider has an API key.
- * If not, run the onboarding flow.
- * Returns { provider, model } to use.
+ * Ensure the target provider is configured.
+ * - For API-key providers: find a key in env or on disk, otherwise onboard.
+ * - For local providers (ollama): require a stored baseUrl, otherwise onboard.
  */
 export async function ensureAuth(
   requestedProvider: string,
@@ -29,14 +43,26 @@ export async function ensureAuth(
   const info = getProviderById(requestedProvider);
 
   if (info) {
-    const key = resolveApiKey(info);
-    if (key) {
-      setProviderEnv(info, key);
-      return { provider: requestedProvider, model: requestedModel };
+    if (info.local) {
+      if (getProviderConfig(info.id)?.baseUrl) {
+        return { provider: requestedProvider, model: requestedModel };
+      }
+    } else {
+      const key = resolveApiKey(info);
+      if (key) {
+        setProviderEnv(info, key);
+        return { provider: requestedProvider, model: requestedModel };
+      }
     }
   }
 
   for (const p of PROVIDERS) {
+    if (p.local) {
+      if (getProviderConfig(p.id)?.baseUrl) {
+        return { provider: p.id, model: p.defaultModel };
+      }
+      continue;
+    }
     const key = resolveApiKey(p);
     if (key) {
       setProviderEnv(p, key);
@@ -50,7 +76,7 @@ export async function ensureAuth(
 async function runOnboarding(): Promise<{ provider: string; model: string }> {
   console.log();
   console.log(chalk.bold.cyan('Welcome to harnext!'));
-  console.log(chalk.dim('No API keys found. Let\'s set up a provider.'));
+  console.log(chalk.dim('No providers configured. Let\'s set one up.'));
 
   const provider = await selectOnboardingProvider();
   if (!provider) {
@@ -58,14 +84,27 @@ async function runOnboarding(): Promise<{ provider: string; model: string }> {
     process.exit(0);
   }
 
-  const key = await promptApiKey(provider);
+  if (provider.local) {
+    const { model } = await onboardLocalProvider(provider);
+    return { provider: provider.id, model };
+  }
 
+  const key = await promptApiKey(provider);
   saveProviderKey(provider.id, key);
   setProviderEnv(provider, key);
 
-  console.log(chalk.green(`\n  Saved! Using ${provider.name} / ${provider.defaultModel}\n`));
+  // Let the user pick a model now that we know the provider is reachable.
+  // Fall back to the provider's default if the registry lookup fails or the user cancels.
+  let modelId = provider.defaultModel;
+  try {
+    const picked = await selectModel(provider);
+    if (picked) modelId = picked.id;
+  } catch {
+    // Ignore — fall back to default model.
+  }
 
-  return { provider: provider.id, model: provider.defaultModel };
+  console.log(chalk.green(`\n  Saved! Using ${provider.name} / ${modelId}\n`));
+  return { provider: provider.id, model: modelId };
 }
 
 async function selectOnboardingProvider(): Promise<ProviderInfo | undefined> {
@@ -98,5 +137,53 @@ async function promptApiKey(provider: ProviderInfo): Promise<string> {
       });
     };
     ask();
+  });
+}
+
+/**
+ * Configure a local provider (ollama). Prompts for base URL, verifies it,
+ * then lets the user pick one of the installed models.
+ */
+export async function onboardLocalProvider(provider: ProviderInfo): Promise<{ model: string }> {
+  const defaultBaseUrl = provider.defaultBaseUrl ?? DEFAULT_OLLAMA_BASE_URL;
+  const existing = getProviderConfig(provider.id)?.baseUrl;
+  const baseUrl = await promptBaseUrl(provider.name, existing ?? defaultBaseUrl);
+
+  saveProviderConfig(provider.id, { baseUrl });
+
+  let models: string[] = [];
+  try {
+    const summaries = await listOllamaModels(baseUrl);
+    models = summaries.map((m) => m.id);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.log(chalk.yellow(`  Could not reach ${provider.name} at ${baseUrl}: ${message}`));
+    console.log(chalk.dim('  Saved the URL anyway — you can pick a model later via /model.'));
+    return { model: provider.defaultModel };
+  }
+
+  if (models.length === 0) {
+    console.log(chalk.yellow(`  No models installed on ${provider.name}. Pull one with "ollama pull <name>".`));
+    return { model: provider.defaultModel };
+  }
+
+  const picked = await select(
+    models.map((id) => ({ label: id, value: id })),
+    { title: `Select an ${provider.name} model`, pageSize: 15 },
+  );
+
+  const model = picked ?? models[0];
+  console.log(chalk.green(`\n  Saved! Using ${provider.name} at ${baseUrl} / ${model}\n`));
+  return { model };
+}
+
+function promptBaseUrl(providerName: string, fallback: string): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise<string>((resolve) => {
+    rl.question(chalk.cyan(`  ${providerName} base URL [${fallback}]: `), (answer) => {
+      rl.close();
+      const raw = answer.trim() || fallback;
+      resolve(normalizeOllamaBaseUrl(raw));
+    });
   });
 }
