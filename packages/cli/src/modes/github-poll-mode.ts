@@ -3,18 +3,25 @@ import type { AgentEvent } from '@mariozechner/pi-agent-core';
 import {
   acquireLock,
   appendGithubPollTick,
+  createAgentSession,
   fetchUpdatedIssues,
   persistPointer,
   pruneAgentRunLogs,
+  pruneStaleWorktrees,
   refetchItem,
   releaseLock,
+  releaseWorktreeForItem,
+  resolveWorktreeForItem,
   runPollTick,
   transitionLabels,
   writeAgentRunLog,
   type AgentRunLogEvent,
   type AgentRunResult,
   type AgentSession,
+  type CreateAgentSessionOptions,
   type GithubConnectionConfig,
+  type GithubIssueItem,
+  type WorktreeRecord,
 } from '@harnext/core';
 
 /** Keep tool output from ballooning the transcript — 8 KB per call is enough for triage. */
@@ -54,21 +61,34 @@ function extractMessageText(content: unknown): string {
     .join('');
 }
 
+/** Config the caller passes in instead of a single pre-built session. */
+export type GithubPollSessionFactoryOptions = Pick<
+  CreateAgentSessionOptions,
+  'provider' | 'modelId' | 'thinkingLevel' | 'systemPrompt'
+>;
+
 export interface GithubPollModeOptions {
   cwd: string;
   config: GithubConnectionConfig;
+  /**
+   * Knobs for building per-item AgentSessions. cwd is supplied internally
+   * (the worktree path for the current item) so the caller doesn't set it.
+   */
+  session: GithubPollSessionFactoryOptions;
+}
+
+function isPr(item: GithubIssueItem): boolean {
+  return !!item.pull_request;
 }
 
 /**
  * Cron-driven GitHub poller. Acquires a per-project lock, runs one tick that
  * may process multiple issues and chain YOLO stages, writes the updated
- * pointer back to github.json, and exits. Any output from the agent session
- * is captured per-stage into the tick log rather than printed — cron would
- * swallow stdout anyway, and structured logs are what the wizard's viewer
- * will read.
+ * pointer back to github.json, and exits. Each issue gets its own git
+ * worktree and a fresh AgentSession rooted in that worktree, so agent tool
+ * calls never touch the user's live checkout.
  */
 export async function runGithubPollMode(
-  session: AgentSession,
   options: GithubPollModeOptions,
 ): Promise<number> {
   const { cwd, config } = options;
@@ -90,54 +110,67 @@ export async function runGithubPollMode(
   }
 
   try {
-    // Per-run capture buffers. Reset inside runAgent() before each invocation
-    // so each stage run gets a clean slate.
+    // Per-run capture buffers reset inside runAgent() before each invocation.
     let lastAssistantText = '';
     let toolErrored = false;
     let events: AgentRunLogEvent[] = [];
 
-    session.subscribe(async (event: AgentEvent) => {
-      const ts = new Date().toISOString();
-      switch (event.type) {
-        case 'message_start':
-          events.push({ ts, type: 'message_start', role: event.message.role });
-          break;
-        case 'message_end': {
-          const text = extractMessageText(event.message.content);
-          if (event.message.role === 'assistant') lastAssistantText = text;
-          events.push({ ts, type: 'message_end', role: event.message.role, text });
-          break;
+    // Current item's session + subscription handle. Set by resolveWorktree,
+    // cleared by releaseWorktree.
+    let currentSession: AgentSession | undefined;
+    let currentUnsubscribe: (() => void) | undefined;
+
+    const subscribe = (session: AgentSession): (() => void) =>
+      session.subscribe(async (event: AgentEvent) => {
+        const ts = new Date().toISOString();
+        switch (event.type) {
+          case 'message_start':
+            events.push({ ts, type: 'message_start', role: event.message.role });
+            break;
+          case 'message_end': {
+            const text = extractMessageText(event.message.content);
+            if (event.message.role === 'assistant') lastAssistantText = text;
+            events.push({ ts, type: 'message_end', role: event.message.role, text });
+            break;
+          }
+          case 'tool_execution_start':
+            events.push({
+              ts,
+              type: 'tool_execution_start',
+              toolName: event.toolName,
+              toolCallId: event.toolCallId,
+              toolInput: event.args,
+            });
+            break;
+          case 'tool_execution_end':
+            if (event.isError) toolErrored = true;
+            events.push({
+              ts,
+              type: 'tool_execution_end',
+              toolName: event.toolName,
+              toolCallId: event.toolCallId,
+              toolOutput: stringifyToolResult(event.result),
+              isError: event.isError,
+            });
+            break;
         }
-        case 'tool_execution_start':
-          events.push({
-            ts,
-            type: 'tool_execution_start',
-            toolName: event.toolName,
-            toolCallId: event.toolCallId,
-            toolInput: event.args,
-          });
-          break;
-        case 'tool_execution_end':
-          if (event.isError) toolErrored = true;
-          events.push({
-            ts,
-            type: 'tool_execution_end',
-            toolName: event.toolName,
-            toolCallId: event.toolCallId,
-            toolOutput: stringifyToolResult(event.result),
-            isError: event.isError,
-          });
-          break;
-      }
-    });
+      });
 
     const runAgent = async (prompt: string): Promise<AgentRunResult> => {
       lastAssistantText = '';
       toolErrored = false;
       events = [];
       const started = Date.now();
+      if (!currentSession) {
+        return {
+          exit: 1,
+          durationMs: 0,
+          output: '',
+          error: 'no active session for item; resolveWorktree did not run',
+        };
+      }
       try {
-        await session.prompt(prompt);
+        await currentSession.prompt(prompt);
         return {
           exit: toolErrored ? 2 : 0,
           durationMs: Date.now() - started,
@@ -155,11 +188,82 @@ export async function runGithubPollMode(
       }
     };
 
+    const resolveWorktree = async (item: GithubIssueItem): Promise<WorktreeRecord> => {
+      const itemKind: 'issue' | 'pr' = isPr(item) ? 'pr' : 'issue';
+      const record = await resolveWorktreeForItem({
+        cwd,
+        itemNumber: item.number,
+        itemKind,
+      });
+      appendGithubPollTick(cwd, {
+        ts: new Date().toISOString(),
+        itemNumber: item.number,
+        itemKind,
+        stageId: '(worktree-ready)',
+        stageLabel: '',
+        mode: 'yolo',
+        exit: 0,
+        durationMs: 0,
+        output: `worktree at ${record.path} (branch ${record.branch})`,
+      });
+
+      const { session, diagnostics } = await createAgentSession({
+        provider: options.session.provider,
+        modelId: options.session.modelId,
+        thinkingLevel: options.session.thinkingLevel,
+        systemPrompt: options.session.systemPrompt,
+        cwd: record.path,
+        quiet: true,
+      });
+      for (const d of diagnostics) {
+        appendGithubPollTick(cwd, {
+          ts: new Date().toISOString(),
+          itemNumber: item.number,
+          itemKind,
+          stageId: `(${d.source}-${d.type})`,
+          stageLabel: '',
+          mode: 'yolo',
+          exit: 0,
+          durationMs: 0,
+          output: `${d.message} (${d.path})`,
+        });
+      }
+      currentSession = session;
+      currentUnsubscribe = subscribe(session);
+      return record;
+    };
+
+    const releaseWorktree = async (item: GithubIssueItem): Promise<void> => {
+      if (currentUnsubscribe) {
+        try {
+          currentUnsubscribe();
+        } catch {
+          // best-effort
+        }
+        currentUnsubscribe = undefined;
+      }
+      currentSession = undefined;
+      await releaseWorktreeForItem({ cwd, itemNumber: item.number });
+      appendGithubPollTick(cwd, {
+        ts: new Date().toISOString(),
+        itemNumber: item.number,
+        itemKind: isPr(item) ? 'pr' : 'issue',
+        stageId: '(worktree-released)',
+        stageLabel: '',
+        mode: 'yolo',
+        exit: 0,
+        durationMs: 0,
+        output: `released worktree for #${item.number}`,
+      });
+    };
+
     const result = await runPollTick(config, {
       fetch: fetchUpdatedIssues,
       refetch: refetchItem,
       transition: transitionLabels,
       runAgent,
+      resolveWorktree,
+      releaseWorktree,
       appendTick: (rec) => appendGithubPollTick(cwd, rec),
       writeRunLog: (rec) => {
         try {
@@ -198,6 +302,11 @@ export async function runGithubPollMode(
       pruneAgentRunLogs(cwd);
     } catch {
       // best-effort cleanup; never fail the tick because of it.
+    }
+    try {
+      pruneStaleWorktrees(cwd);
+    } catch {
+      // best-effort; stale worktrees aren't fatal to the tick.
     }
     return 0;
   } catch (err) {

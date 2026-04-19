@@ -6,9 +6,11 @@ import {
   compactNow,
   ensureBundledSkills,
   estimateTotalTokens,
+  listAgentRunLogs,
+  reconstructMessagesFromRunLog,
   setDefault,
 } from '@harnext/core';
-import type { EnsureResult } from '@harnext/core';
+import type { AgentRunLogSummary, EnsureResult } from '@harnext/core';
 import chalk from 'chalk';
 
 import { runConnectGithubCommand } from '../../cli/github-prompt.js';
@@ -220,6 +222,58 @@ const SLASH_COMMANDS: SlashCommand[] = [
     },
   },
   {
+    name: '/runs',
+    description: 'Replay a saved GitHub poller run into this session',
+    action: async (ctx) => {
+      const runs = listAgentRunLogs(process.cwd());
+      console.log();
+      if (runs.length === 0) {
+        console.log(chalk.dim('  No runs found for this project.'));
+        console.log();
+        return true;
+      }
+      const items: SelectItem<AgentRunLogSummary>[] = runs.map((r) => ({
+        label: formatRunLabel(r),
+        value: r,
+        hint: formatRunHint(r),
+      }));
+      const selected = await select(items, {
+        title: 'Select a run to replay (esc to cancel)',
+      });
+      if (!selected) {
+        console.log(chalk.dim('  Cancelled.'));
+        console.log();
+        return true;
+      }
+      try {
+        const { record, messages } = reconstructMessagesFromRunLog(selected.path);
+        try {
+          ctx.session.agent.abort();
+        } catch {
+          // agent may not be running
+        }
+        ctx.session.agent.reset();
+        ctx.session.agent.state.messages = messages;
+        console.log(
+          chalk.green('  Loaded ') +
+            chalk.bold(`${messages.length} messages`) +
+            chalk.dim(
+              ` from ${selected.fileName} (${record.itemKind} #${record.itemNumber} · ${record.stageId})`,
+            ),
+        );
+        console.log(chalk.dim('  Type your next prompt to continue the conversation.'));
+        console.log();
+      } catch (err) {
+        console.log(
+          chalk.red('  Failed to load run: ') +
+            (err instanceof Error ? err.message : String(err)),
+        );
+        console.log();
+      }
+      return true;
+    },
+  },
+  {
     name: '/help',
     description: 'Show available commands',
     action: async () => {
@@ -241,6 +295,16 @@ const SLASH_COMMANDS: SlashCommand[] = [
     action: async () => false,
   },
 ];
+
+function formatRunLabel(r: AgentRunLogSummary): string {
+  return `${r.itemKind} #${r.itemNumber} · ${r.stageId} · ${r.eventCount} events`;
+}
+
+function formatRunHint(r: AgentRunLogSummary): string {
+  const status = r.exit === 0 ? 'ok' : r.error ? `err: ${r.error}` : `exit ${r.exit}`;
+  const secs = Math.round(r.durationMs / 100) / 10;
+  return `${r.ts} · ${secs}s · ${status}`;
+}
 
 type SelectedEntry = { kind: 'command'; command: SlashCommand } | { kind: 'skill'; skill: Skill };
 

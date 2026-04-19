@@ -107,7 +107,7 @@ async function runHeartbeat(
       durationMs: 0,
       prompt: '',
       output: '',
-      error: `no heartbeat config for "${name}" in .harnext/heartbeats/`,
+      error: `no heartbeat config for "${name}"`,
     });
     return 1;
   }
@@ -146,7 +146,9 @@ async function runHeartbeat(
 /**
  * Cron entry point for the GitHub issue poller. Same unattended-failure
  * discipline as runHeartbeat: no prompt for auth, any failure is captured
- * as a tick log record and surfaced via exit code.
+ * as a tick log record and surfaced via exit code. Each item processed in
+ * the tick runs inside its own git worktree — the session is rebuilt per
+ * item with the worktree cwd — so the user's live checkout is never edited.
  */
 async function runGithubPoll(cwd: string, thinkingLevel: ThinkingLevel): Promise<number> {
   const config = loadGithubConnection(cwd);
@@ -161,7 +163,7 @@ async function runGithubPoll(cwd: string, thinkingLevel: ThinkingLevel): Promise
       exit: 1,
       durationMs: 0,
       output: '',
-      error: `no github connection config at .harnext/github.json (run /connect-github first)`,
+      error: `no github connection config (run /connect-github first)`,
     });
     return 1;
   }
@@ -174,27 +176,15 @@ async function runGithubPoll(cwd: string, thinkingLevel: ThinkingLevel): Promise
     FALLBACK_MODEL;
 
   try {
-    const { session, diagnostics } = await createAgentSession({
-      provider: resolvedProvider,
-      modelId: resolvedModel,
+    return await runGithubPollMode({
       cwd,
-      thinkingLevel,
-      quiet: true,
+      config,
+      session: {
+        provider: resolvedProvider,
+        modelId: resolvedModel,
+        thinkingLevel,
+      },
     });
-    for (const d of diagnostics) {
-      appendGithubPollTick(cwd, {
-        ts: new Date().toISOString(),
-        itemNumber: -1,
-        itemKind: 'issue',
-        stageId: `(${d.source}-${d.type})`,
-        stageLabel: '',
-        mode: 'yolo',
-        exit: 0,
-        durationMs: 0,
-        output: `${d.message} (${d.path})`,
-      });
-    }
-    return await runGithubPollMode(session, { cwd, config });
   } catch (err) {
     appendGithubPollTick(cwd, {
       ts: new Date().toISOString(),

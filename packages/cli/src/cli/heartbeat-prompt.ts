@@ -7,7 +7,6 @@ import {
   buildCronLine,
   buildCronSchedule,
   deleteHeartbeatConfig,
-  ensureHeartbeatGitignore,
   findCronLine,
   getHeartbeatPaths,
   getHeartbeatTag,
@@ -257,7 +256,6 @@ async function installFlow(
   try {
     saveHeartbeatConfig(cfg);
     installCronLine(cronLine, tag);
-    ensureHeartbeatGitignore(opts.cwd);
     console.log(chalk.green(`  Heartbeat "${draft.name}" installed.`));
     const { config, log } = getHeartbeatPaths(opts.cwd, draft.name);
     console.log(chalk.dim(`    config: ${config}`));

@@ -14,3 +14,5 @@ coverage/
 .harnext/github-poller.lock
 # harnext: github poller runtime
 .harnext/github-runs/
+# harnext: github poller worktree state
+.harnext/worktrees/

@@ -8,8 +8,6 @@ import {
   buildGithubPollCronLine,
   buildHarnextLabelSpecs,
   deleteGithubConnection,
-  ensureGithubGitignore,
-  ensureGithubPollGitignore,
   ensureRepoLabels,
   findCronLine,
   getGithubConfigPath,
@@ -539,8 +537,6 @@ async function createFlow(
 
   try {
     saveGithubConnection(opts.cwd, cfg);
-    ensureGithubGitignore(opts.cwd);
-    ensureGithubPollGitignore(opts.cwd);
     installCronLine(cronLine, tag);
 
     console.log(chalk.dim('  Ensuring pipeline labels exist on the repo…'));

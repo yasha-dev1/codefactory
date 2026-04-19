@@ -3,8 +3,11 @@ export {
   VERSION,
   CONFIG_DIR_NAME,
   getAgentDir,
-  getSessionsDir,
+  getHarnextHome,
+  getProjectHash,
   getProjectSkillsDir,
+  getProjectStateDir,
+  getSessionsDir,
   getUserSkillsDir,
 } from './config.js';
 
@@ -33,7 +36,6 @@ export {
   removeCronLine,
   findCronLine,
   appendHeartbeatTick,
-  ensureHeartbeatGitignore,
   type HeartbeatConfig,
   type HeartbeatIntervalMinutes,
   type HeartbeatPaths,
@@ -52,7 +54,6 @@ export {
   loadGithubConnection,
   saveGithubConnection,
   deleteGithubConnection,
-  ensureGithubGitignore,
   runGh,
   verifyGhAuth,
   getRepoFromCwd,
@@ -96,7 +97,6 @@ export {
   acquireLock,
   releaseLock,
   buildGithubPollCronLine,
-  ensureGithubPollGitignore,
   runPollTick,
   persistPointer,
   stringifyConnectionForSave,
@@ -110,7 +110,39 @@ export {
   type PollTickIO,
   type PollTickResult,
   type GithubPollCronLineOptions,
+  type RunAgentOptions,
 } from './github-poller.js';
+
+export {
+  listAgentRunLogs,
+  loadAgentRunLog,
+  reconstructMessagesFromEvents,
+  reconstructMessagesFromRunLog,
+  type AgentRunLogSummary,
+} from './run-replay.js';
+
+export {
+  WORKTREES_DIR_NAME,
+  WORKTREE_STATE_DIR_NAME,
+  DEFAULT_WORKTREE_STALE_DAYS,
+  defaultRunGit,
+  deleteWorktreeRecord,
+  getProjectWorktreeHash,
+  getProjectWorktreeRoot,
+  getWorktreesGlobalRoot,
+  getWorktreesStateDir,
+  listWorktreeRecords,
+  loadWorktreeRecord,
+  pruneStaleWorktrees,
+  releaseWorktreeForItem,
+  resolveWorktreeForItem,
+  saveWorktreeRecord,
+  type PruneResult as WorktreePruneResult,
+  type ResolveWorktreeOptions,
+  type RunGit,
+  type RunGitResult,
+  type WorktreeRecord,
+} from './worktree.js';
 
 export {
   loadSkills,

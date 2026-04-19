@@ -14,9 +14,11 @@ import {
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 
-import { CONFIG_DIR_NAME } from './config.js';
+import { getProjectStateDir } from './config.js';
 import {
   AWAITING_APPROVAL_LABEL,
+  GITHUB_CONFIG_FILE,
+  NEEDS_JUDGMENT_LABEL,
   runGh,
   type GhResult,
   type GithubConnectionConfig,
@@ -24,6 +26,7 @@ import {
   type StageDefinition,
   type StageMode,
 } from './github-connection.js';
+import type { WorktreeRecord } from './worktree.js';
 
 /**
  * Hard upper bound on how many stage chains one item can advance through
@@ -35,7 +38,7 @@ export const MAX_STAGE_CHAIN = 10;
 
 export const GITHUB_POLL_LOG_FILE = 'github-poller.jsonl';
 export const GITHUB_POLL_LOCK_FILE = 'github-poller.lock';
-/** Per-tick full agent transcripts live under <cwd>/.harnext/<GITHUB_RUNS_DIR_NAME>/. */
+/** Per-tick full agent transcripts live under the project state dir. */
 export const GITHUB_RUNS_DIR_NAME = 'github-runs';
 /** Default retention for per-run logs. Ticks older than this get pruned. */
 export const DEFAULT_RUN_LOG_RETENTION_DAYS = 7;
@@ -78,7 +81,7 @@ export interface GithubPollPaths {
 }
 
 export function getGithubPollPaths(cwd: string): GithubPollPaths {
-  const dir = join(cwd, CONFIG_DIR_NAME);
+  const dir = getProjectStateDir(cwd);
   return {
     dir,
     log: join(dir, GITHUB_POLL_LOG_FILE),
@@ -87,7 +90,7 @@ export function getGithubPollPaths(cwd: string): GithubPollPaths {
 }
 
 export function getGithubRunsDir(cwd: string): string {
-  return join(cwd, CONFIG_DIR_NAME, GITHUB_RUNS_DIR_NAME);
+  return join(getProjectStateDir(cwd), GITHUB_RUNS_DIR_NAME);
 }
 
 /** Stable cron tag so we can find/update the line on reconfigure. */
@@ -464,28 +467,6 @@ export function buildGithubPollCronLine(opts: GithubPollCronLineOptions): string
   return `${opts.schedule} ${cmd} # ${opts.tag}`;
 }
 
-/** Ensure the log + lock files + runs dir are gitignored. */
-export function ensureGithubPollGitignore(cwd: string): void {
-  const gitignorePath = join(cwd, '.gitignore');
-  const entries = [
-    `${CONFIG_DIR_NAME}/${GITHUB_POLL_LOG_FILE}`,
-    `${CONFIG_DIR_NAME}/${GITHUB_POLL_LOCK_FILE}`,
-    `${CONFIG_DIR_NAME}/${GITHUB_RUNS_DIR_NAME}/`,
-  ];
-  let existing = '';
-  if (existsSync(gitignorePath)) {
-    existing = readFileSync(gitignorePath, 'utf-8');
-  } else {
-    mkdirSync(dirname(gitignorePath), { recursive: true });
-  }
-  const lines = new Set(existing.split('\n').map((l) => l.trim()));
-  const missing = entries.filter((e) => !lines.has(e));
-  if (missing.length === 0) return;
-  const prefix = existing.length > 0 && !existing.endsWith('\n') ? '\n' : '';
-  const block = `${prefix}# harnext: github poller runtime\n${missing.join('\n')}\n`;
-  appendFileSync(gitignorePath, block, 'utf-8');
-}
-
 // ── Tick driver ─────────────────────────────────────────────────────
 
 export interface AgentRunResult {
@@ -495,6 +476,15 @@ export interface AgentRunResult {
   error?: string;
   /** Optional full transcript of the run. When present, runPollTick forwards it to writeRunLog. */
   events?: AgentRunLogEvent[];
+}
+
+export interface RunAgentOptions {
+  /**
+   * Per-item worktree path, when `resolveWorktree` is wired. When undefined
+   * the runAgent implementation should fall back to its own default cwd
+   * (typically the project root).
+   */
+  cwd?: string;
 }
 
 /**
@@ -511,10 +501,22 @@ export interface PollTickIO {
     remove: string,
     add?: string,
   ) => GhResult<null>;
-  runAgent: (prompt: string) => Promise<AgentRunResult>;
+  runAgent: (prompt: string, opts: RunAgentOptions) => Promise<AgentRunResult>;
   appendTick: (record: StageTickRecord) => void;
   /** If provided, each stage run's full transcript is written here. */
   writeRunLog?: (record: AgentRunLogRecord) => void;
+  /**
+   * If provided, called at the top of each item's stage chain. The returned
+   * record's `path` becomes the cwd passed to `runAgent` for every stage the
+   * item goes through during this tick.
+   */
+  resolveWorktree?: (item: GithubIssueItem) => Promise<WorktreeRecord>;
+  /**
+   * If provided, called after the chain terminates cleanly — i.e. the item
+   * exited the pipeline (no next stage) and isn't parked on awaiting-approval
+   * or needs-judgment. Release is best-effort: errors are swallowed into warn.
+   */
+  releaseWorktree?: (item: GithubIssueItem) => Promise<void>;
   /** Called for warnings that are not fatal (e.g. label transition failed). */
   warn?: (message: string) => void;
   /** Override date source for tests. */
@@ -573,30 +575,43 @@ export async function runPollTick(
       continue;
     }
 
-    let stage = detectStageForItem(item, cfg.stages);
+    let stage: StageDefinition | undefined = detectStageForItem(item, cfg.stages);
+    if (!stage) {
+      newPointer = item.updated_at;
+      continue;
+    }
+
+    // Resolve a worktree for this item up front. Any subsequent stage in the
+    // chain reuses it. If the resolve hook throws, we surface the error as a
+    // warning and skip the item — the next tick will retry.
+    let workRecord: WorktreeRecord | undefined;
+    if (io.resolveWorktree) {
+      try {
+        workRecord = await io.resolveWorktree(item);
+      } catch (err) {
+        warn(
+          `worktree resolve failed for #${item.number}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+        newPointer = item.updated_at;
+        continue;
+      }
+    }
+
     let chainDepth = 0;
     let processedThisItem = false;
+    /** True iff the item exited the pipeline cleanly this tick. */
+    let chainCompleted = false;
 
-    while (stage && chainDepth < MAX_STAGE_CHAIN) {
-      const prompt = buildStagePrompt(stage, item);
-      const startedAt = now();
-      const result = await io.runAgent(prompt);
+    try {
+      while (stage && chainDepth < MAX_STAGE_CHAIN) {
+        const prompt = buildStagePrompt(stage, item);
+        const startedAt = now();
+        const result = await io.runAgent(prompt, { cwd: workRecord?.path });
 
-      const kind: 'issue' | 'pr' = isPullRequest(item) ? 'pr' : 'issue';
-      io.appendTick({
-        ts: startedAt.toISOString(),
-        itemNumber: item.number,
-        itemKind: kind,
-        stageId: stage.id,
-        stageLabel: stage.label,
-        mode: stage.mode,
-        exit: result.exit,
-        durationMs: result.durationMs,
-        output: result.output,
-        error: result.error,
-      });
-      if (io.writeRunLog) {
-        io.writeRunLog({
+        const kind: 'issue' | 'pr' = isPullRequest(item) ? 'pr' : 'issue';
+        io.appendTick({
           ts: startedAt.toISOString(),
           itemNumber: item.number,
           itemKind: kind,
@@ -605,50 +620,88 @@ export async function runPollTick(
           mode: stage.mode,
           exit: result.exit,
           durationMs: result.durationMs,
-          prompt,
-          events: result.events ?? [],
+          output: result.output,
           error: result.error,
         });
-      }
-      processedThisItem = true;
+        if (io.writeRunLog) {
+          io.writeRunLog({
+            ts: startedAt.toISOString(),
+            itemNumber: item.number,
+            itemKind: kind,
+            stageId: stage.id,
+            stageLabel: stage.label,
+            mode: stage.mode,
+            exit: result.exit,
+            durationMs: result.durationMs,
+            prompt,
+            events: result.events ?? [],
+            error: result.error,
+          });
+        }
+        processedThisItem = true;
 
-      if (result.exit !== 0) {
-        // Agent failed — leave the label in place so the human can decide to
-        // re-queue by touching the issue.
-        warn(`agent failed on #${item.number} stage ${stage.id} (exit ${result.exit})`);
-        break;
-      }
+        if (result.exit !== 0) {
+          // Agent failed — leave the label in place so the human can decide to
+          // re-queue by touching the issue.
+          warn(`agent failed on #${item.number} stage ${stage.id} (exit ${result.exit})`);
+          break;
+        }
 
-      const currentStage = stage;
-      const nextStage = cfg.stages[cfg.stages.indexOf(currentStage) + 1];
-      const handoffLabel = currentStage.mode === 'human-approval'
-        ? AWAITING_APPROVAL_LABEL
-        : nextStage?.label;
+        const currentStage: StageDefinition = stage;
+        const nextStage: StageDefinition | undefined = cfg.stages[cfg.stages.indexOf(currentStage) + 1];
+        const handoffLabel = currentStage.mode === 'human-approval'
+          ? AWAITING_APPROVAL_LABEL
+          : nextStage?.label;
 
-      const transitionResult = io.transition(
-        cfg.repo,
-        item.number,
-        currentStage.label,
-        handoffLabel,
-      );
-      if (!transitionResult.ok) {
-        warn(
-          `label transition failed for #${item.number}: ${transitionResult.message}`,
+        const transitionResult = io.transition(
+          cfg.repo,
+          item.number,
+          currentStage.label,
+          handoffLabel,
         );
-        break;
-      }
+        if (!transitionResult.ok) {
+          warn(
+            `label transition failed for #${item.number}: ${transitionResult.message}`,
+          );
+          break;
+        }
 
-      if (currentStage.mode === 'human-approval' || !nextStage) break;
+        if (currentStage.mode === 'human-approval') break;
+        if (!nextStage) {
+          // Last YOLO stage; nothing further to do on this item.
+          chainCompleted = true;
+          break;
+        }
 
-      // YOLO: reload the item so detectStageForItem sees the newly-added next label.
-      const refetched = io.refetch(cfg.repo, item.number);
-      if (!refetched.ok) {
-        warn(`refetch failed for #${item.number}: ${refetched.message}`);
-        break;
+        // YOLO: reload the item so detectStageForItem sees the newly-added next label.
+        const refetched = io.refetch(cfg.repo, item.number);
+        if (!refetched.ok) {
+          warn(`refetch failed for #${item.number}: ${refetched.message}`);
+          break;
+        }
+        item = refetched.value;
+        stage = nextStage;
+        chainDepth += 1;
       }
-      item = refetched.value;
-      stage = nextStage;
-      chainDepth += 1;
+    } finally {
+      if (io.releaseWorktree && workRecord) {
+        const parkedLabels = new Set(item.labels.map((l) => l.name));
+        const parked =
+          parkedLabels.has(AWAITING_APPROVAL_LABEL) ||
+          parkedLabels.has(NEEDS_JUDGMENT_LABEL);
+        const closed = item.state === 'closed';
+        if (closed || (chainCompleted && !parked)) {
+          try {
+            await io.releaseWorktree(item);
+          } catch (err) {
+            warn(
+              `worktree release failed for #${item.number}: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
+          }
+        }
+      }
     }
 
     if (processedThisItem) processed += 1;
@@ -676,7 +729,7 @@ export function persistPointer(
   cfg: GithubConnectionConfig,
   pointer: string,
 ): void {
-  const path = join(cwd, CONFIG_DIR_NAME, 'github.json');
+  const path = join(getProjectStateDir(cwd), GITHUB_CONFIG_FILE);
   const next: GithubConnectionConfig = { ...cfg, lastSeenUpdatedAt: pointer, updatedAt: Date.now() };
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, stringifyConnectionForSave(next), { encoding: 'utf-8', mode: 0o600 });

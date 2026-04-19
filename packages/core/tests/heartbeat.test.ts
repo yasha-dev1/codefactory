@@ -2,14 +2,13 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   appendHeartbeatTick,
   buildCronLine,
   buildCronSchedule,
   deleteHeartbeatConfig,
-  ensureHeartbeatGitignore,
   findCronLine,
   getHeartbeatPaths,
   getHeartbeatTag,
@@ -38,6 +37,20 @@ function makeFakeCrontab(initial = ''): CrontabIO & { get: () => string } {
 function tmpCwd(): string {
   return mkdtempSync(join(tmpdir(), 'harnext-heartbeat-'));
 }
+
+let harnextHome: string;
+const originalHarnextHome = process.env.HARNEXT_HOME;
+
+beforeAll(() => {
+  harnextHome = mkdtempSync(join(tmpdir(), 'harnext-home-heartbeat-'));
+  process.env.HARNEXT_HOME = harnextHome;
+});
+
+afterAll(() => {
+  if (originalHarnextHome === undefined) delete process.env.HARNEXT_HOME;
+  else process.env.HARNEXT_HOME = originalHarnextHome;
+  rmSync(harnextHome, { recursive: true, force: true });
+});
 
 describe('validateHeartbeatName', () => {
   it('accepts lowercase kebab-case names', () => {
@@ -112,7 +125,7 @@ describe('buildCronLine', () => {
     expect(line).toContain('/usr/bin/node');
     expect(line).toContain('/opt/harnext/cli.js --heartbeat ci');
     expect(line).toContain('cd /home/u/proj');
-    expect(line).toContain('/home/u/proj/.harnext/heartbeats/ci.jsonl');
+    expect(line).toContain(getHeartbeatPaths('/home/u/proj', 'ci').log);
     expect(line).toContain('# harnext:heartbeat:abc:ci');
   });
 
@@ -251,37 +264,6 @@ describe('crontab install/remove/find', () => {
   it('findCronLine returns the matching line or null', () => {
     expect(findCronLine(tag, makeFakeCrontab(`${line}\n`))).toContain(tag);
     expect(findCronLine(tag, makeFakeCrontab(''))).toBeNull();
-  });
-});
-
-describe('ensureHeartbeatGitignore', () => {
-  let cwd: string;
-  beforeEach(() => {
-    cwd = tmpCwd();
-  });
-  afterEach(() => {
-    rmSync(cwd, { recursive: true, force: true });
-  });
-
-  it('creates .gitignore with the heartbeats dir entry when none exists', () => {
-    ensureHeartbeatGitignore(cwd);
-    const body = readFileSync(join(cwd, '.gitignore'), 'utf-8');
-    expect(body).toContain('.harnext/heartbeats/');
-  });
-
-  it('appends the entry without touching existing content', () => {
-    writeFileSync(join(cwd, '.gitignore'), 'node_modules/\n', 'utf-8');
-    ensureHeartbeatGitignore(cwd);
-    const body = readFileSync(join(cwd, '.gitignore'), 'utf-8');
-    expect(body).toContain('node_modules/');
-    expect(body).toContain('.harnext/heartbeats/');
-  });
-
-  it('is a no-op when the entry is already present', () => {
-    const existing = '.harnext/heartbeats/\n';
-    writeFileSync(join(cwd, '.gitignore'), existing, 'utf-8');
-    ensureHeartbeatGitignore(cwd);
-    expect(readFileSync(join(cwd, '.gitignore'), 'utf-8')).toBe(existing);
   });
 });
 

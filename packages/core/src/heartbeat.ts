@@ -9,9 +9,9 @@ import {
 } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { execSync } from 'node:child_process';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 
-import { CONFIG_DIR_NAME } from './config.js';
+import { getProjectStateDir } from './config.js';
 
 export const HEARTBEAT_INTERVAL_PRESETS = [1, 3, 5, 15, 30, 60, 120, 360, 720, 1440] as const;
 export type HeartbeatIntervalMinutes = (typeof HEARTBEAT_INTERVAL_PRESETS)[number];
@@ -60,7 +60,7 @@ export function validateHeartbeatName(name: string): string | null {
 }
 
 export function getHeartbeatsDir(cwd: string): string {
-  return join(cwd, CONFIG_DIR_NAME, HEARTBEATS_DIR_NAME);
+  return join(getProjectStateDir(cwd), HEARTBEATS_DIR_NAME);
 }
 
 export function getHeartbeatPaths(cwd: string, name: string): HeartbeatPaths {
@@ -268,19 +268,3 @@ export function appendHeartbeatTick(
   appendFileSync(log, JSON.stringify(record) + '\n', 'utf-8');
 }
 
-/** Ensure `.harnext/heartbeats/` is gitignored. */
-export function ensureHeartbeatGitignore(cwd: string): void {
-  const gitignorePath = join(cwd, '.gitignore');
-  const entry = `${CONFIG_DIR_NAME}/${HEARTBEATS_DIR_NAME}/`;
-  let existing = '';
-  if (existsSync(gitignorePath)) {
-    existing = readFileSync(gitignorePath, 'utf-8');
-  } else {
-    mkdirSync(dirname(gitignorePath), { recursive: true });
-  }
-  const lines = new Set(existing.split('\n').map((l) => l.trim()));
-  if (lines.has(entry)) return;
-  const prefix = existing.length > 0 && !existing.endsWith('\n') ? '\n' : '';
-  const block = `${prefix}# harnext: heartbeat configs + tick logs\n${entry}\n`;
-  appendFileSync(gitignorePath, block, 'utf-8');
-}

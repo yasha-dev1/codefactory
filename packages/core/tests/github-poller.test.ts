@@ -2,11 +2,9 @@ import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writ
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import {
-  CONFIG_DIR_NAME,
-} from '../src/config.js';
+import { getProjectStateDir } from '../src/config.js';
 import {
   AWAITING_APPROVAL_LABEL,
   DEFAULT_STAGES,
@@ -34,12 +32,29 @@ import {
   type AgentRunResult,
   type GithubIssueItem,
   type PollTickIO,
+  type RunAgentOptions,
   type StageTickRecord,
 } from '../src/github-poller.js';
+import type { WorktreeRecord } from '../src/worktree.js';
+import { NEEDS_JUDGMENT_LABEL } from '../src/github-connection.js';
 
 function tmpCwd(): string {
   return mkdtempSync(join(tmpdir(), 'harnext-gh-poll-'));
 }
+
+let harnextHome: string;
+const originalHarnextHome = process.env.HARNEXT_HOME;
+
+beforeAll(() => {
+  harnextHome = mkdtempSync(join(tmpdir(), 'harnext-home-gh-poll-'));
+  process.env.HARNEXT_HOME = harnextHome;
+});
+
+afterAll(() => {
+  if (originalHarnextHome === undefined) delete process.env.HARNEXT_HOME;
+  else process.env.HARNEXT_HOME = originalHarnextHome;
+  rmSync(harnextHome, { recursive: true, force: true });
+});
 
 function makeItem(overrides: Partial<GithubIssueItem> = {}): GithubIssueItem {
   return {
@@ -84,12 +99,14 @@ function makeIo(opts: {
 }): PollTickIO & {
   ticks: StageTickRecord[];
   prompts: string[];
+  promptOpts: RunAgentOptions[];
   transitions: Array<{ remove: string; add?: string; itemNumber: number }>;
   refetches: number[];
   warnings: string[];
 } {
   const ticks: StageTickRecord[] = [];
   const prompts: string[] = [];
+  const promptOpts: RunAgentOptions[] = [];
   const transitions: Array<{ remove: string; add?: string; itemNumber: number }> = [];
   const refetches: number[] = [];
   const warnings: string[] = [];
@@ -115,8 +132,9 @@ function makeIo(opts: {
       }
       return { ok: true, value: null };
     },
-    runAgent: async (prompt) => {
+    runAgent: async (prompt, opts) => {
       prompts.push(prompt);
+      promptOpts.push({ ...opts });
       const next = agentQueue.shift();
       if (!next) throw new Error('test ran out of scripted agent results');
       return next;
@@ -129,7 +147,7 @@ function makeIo(opts: {
     },
   };
 
-  return Object.assign(io, { ticks, prompts, transitions, refetches, warnings });
+  return Object.assign(io, { ticks, prompts, promptOpts, transitions, refetches, warnings });
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -395,7 +413,7 @@ describe('runPollTick', () => {
       appendTick: () => {},
       warn: (m) => io.warnings.push(m),
       warnings: [],
-    };
+    } satisfies PollTickIO & { warnings: string[] };
     const result = await runPollTick(cfg, io);
     expect(result.newPointer).toBe(cfg.lastSeenUpdatedAt);
     expect(result.processed).toBe(0);
@@ -417,7 +435,7 @@ describe('schema backfill', () => {
   });
 
   it('loads an old github.json without stages and backfills defaults', () => {
-    const dir = join(cwd, CONFIG_DIR_NAME);
+    const dir = getProjectStateDir(cwd);
     mkdirSync(dir, { recursive: true });
     const old = {
       repo: 'example/repo',
@@ -677,5 +695,174 @@ describe('runPollTick · writeRunLog', () => {
     expect(runLogs[0].stageId).toBe('triage');
     expect(runLogs[0].prompt).toContain('Triage this.');
     expect(runLogs[0].events).toHaveLength(1);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+
+describe('runPollTick · worktree hooks', () => {
+  function worktreeIo(itemsOpts: {
+    items: GithubIssueItem[];
+    agentResults: AgentRunResult[];
+    refetchResults?: GithubIssueItem[];
+  }) {
+    const io = makeIo(itemsOpts);
+    const resolveCalls: number[] = [];
+    const releaseCalls: number[] = [];
+    const record = (itemNumber: number): WorktreeRecord => ({
+      itemNumber,
+      itemKind: 'issue',
+      path: `/tmp/fake-wt/issue-${itemNumber}`,
+      branch: `harnext/issue-${itemNumber}`,
+      createdAt: '2026-04-19T00:00:00Z',
+      lastStageAt: '2026-04-19T00:00:00Z',
+    });
+    const withHooks: PollTickIO & typeof io & {
+      resolveCalls: number[];
+      releaseCalls: number[];
+    } = Object.assign(io, {
+      resolveWorktree: async (item: GithubIssueItem) => {
+        resolveCalls.push(item.number);
+        return record(item.number);
+      },
+      releaseWorktree: async (item: GithubIssueItem) => {
+        releaseCalls.push(item.number);
+      },
+      resolveCalls,
+      releaseCalls,
+    });
+    return withHooks;
+  }
+
+  it('threads worktree cwd into every runAgent call for the item', async () => {
+    const stages: StageDefinition[] = [
+      { id: 'triage', label: 'harnext:triage', prompt: 'triage', mode: 'yolo' },
+      { id: 'verify', label: 'harnext:verify', prompt: 'verify', mode: 'yolo' },
+    ];
+    const initial = makeItem({ number: 11, labels: [{ name: 'harnext:triage' }] });
+    const after = makeItem({ number: 11, labels: [{ name: 'harnext:verify' }] });
+    const afterLast = makeItem({ number: 11, labels: [] });
+    const io = worktreeIo({
+      items: [initial],
+      agentResults: [
+        { exit: 0, durationMs: 1, output: '' },
+        { exit: 0, durationMs: 1, output: '' },
+      ],
+      refetchResults: [after, afterLast],
+    });
+
+    await runPollTick(baseConfig({ stages }), io);
+
+    expect(io.resolveCalls).toEqual([11]);
+    expect(io.prompts).toHaveLength(2);
+    for (const opts of io.promptOpts) {
+      expect(opts.cwd).toBe('/tmp/fake-wt/issue-11');
+    }
+  });
+
+  it('releases the worktree after a YOLO chain exhausts with no parking label', async () => {
+    const stages: StageDefinition[] = [
+      { id: 'only', label: 'harnext:only', prompt: 'only', mode: 'yolo' },
+    ];
+    const item = makeItem({ number: 12, labels: [{ name: 'harnext:only' }] });
+    const io = worktreeIo({
+      items: [item],
+      agentResults: [{ exit: 0, durationMs: 1, output: '' }],
+    });
+
+    await runPollTick(baseConfig({ stages }), io);
+    expect(io.releaseCalls).toEqual([12]);
+  });
+
+  it('does NOT release when the stage is human-approval (parks on awaiting-approval)', async () => {
+    const stages: StageDefinition[] = [
+      { id: 'plan', label: 'harnext:plan', prompt: 'plan', mode: 'human-approval' },
+    ];
+    // After the stage runs, transition adds awaiting-approval — but the
+    // in-memory item object still has its original labels. The poller's
+    // "parked?" check reads item.labels, so seed them to include the parking label.
+    const parked = makeItem({
+      number: 13,
+      labels: [{ name: 'harnext:plan' }, { name: AWAITING_APPROVAL_LABEL }],
+    });
+    const io = worktreeIo({
+      items: [parked],
+      agentResults: [{ exit: 0, durationMs: 1, output: '' }],
+    });
+    await runPollTick(baseConfig({ stages }), io);
+    expect(io.releaseCalls).toEqual([]);
+  });
+
+  it('does NOT release when the item is parked on needs-judgment', async () => {
+    const stages: StageDefinition[] = [
+      { id: 'only', label: 'harnext:only', prompt: 'only', mode: 'yolo' },
+    ];
+    const item = makeItem({
+      number: 14,
+      labels: [{ name: 'harnext:only' }, { name: NEEDS_JUDGMENT_LABEL }],
+    });
+    const io = worktreeIo({
+      items: [item],
+      agentResults: [{ exit: 0, durationMs: 1, output: '' }],
+    });
+    await runPollTick(baseConfig({ stages }), io);
+    expect(io.releaseCalls).toEqual([]);
+  });
+
+  it('releases when the item is closed, regardless of stage mode', async () => {
+    const stages: StageDefinition[] = [
+      { id: 'plan', label: 'harnext:plan', prompt: 'plan', mode: 'human-approval' },
+    ];
+    const item = makeItem({
+      number: 15,
+      labels: [{ name: 'harnext:plan' }],
+      state: 'closed',
+    });
+    const io = worktreeIo({
+      items: [item],
+      agentResults: [{ exit: 0, durationMs: 1, output: '' }],
+    });
+    await runPollTick(baseConfig({ stages }), io);
+    expect(io.releaseCalls).toEqual([15]);
+  });
+
+  it('skips the item and does NOT release when resolveWorktree throws', async () => {
+    const stages: StageDefinition[] = [
+      { id: 'only', label: 'harnext:only', prompt: 'only', mode: 'yolo' },
+    ];
+    const item = makeItem({ number: 16, labels: [{ name: 'harnext:only' }] });
+    const io = makeIo({
+      items: [item],
+      agentResults: [],
+    });
+    const releaseCalls: number[] = [];
+    const io2: PollTickIO & typeof io & { releaseCalls: number[] } = Object.assign(io, {
+      resolveWorktree: async () => {
+        throw new Error('git boom');
+      },
+      releaseWorktree: async (item: GithubIssueItem) => {
+        releaseCalls.push(item.number);
+      },
+      releaseCalls,
+    });
+    await runPollTick(baseConfig({ stages }), io2);
+
+    expect(io2.prompts).toHaveLength(0);
+    expect(io2.releaseCalls).toEqual([]);
+    expect(io2.warnings.some((w) => w.includes('worktree resolve failed'))).toBe(true);
+  });
+
+  it('does NOT release when the agent failed mid-chain', async () => {
+    const stages: StageDefinition[] = [
+      { id: 'a', label: 'harnext:a', prompt: 'a', mode: 'yolo' },
+      { id: 'b', label: 'harnext:b', prompt: 'b', mode: 'yolo' },
+    ];
+    const item = makeItem({ number: 17, labels: [{ name: 'harnext:a' }] });
+    const io = worktreeIo({
+      items: [item],
+      agentResults: [{ exit: 2, durationMs: 1, output: '', error: 'boom' }],
+    });
+    await runPollTick(baseConfig({ stages }), io);
+    expect(io.releaseCalls).toEqual([]);
   });
 });

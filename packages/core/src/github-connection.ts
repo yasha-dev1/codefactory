@@ -4,12 +4,11 @@ import {
   readFileSync,
   unlinkSync,
   writeFileSync,
-  appendFileSync,
 } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 
-import { CONFIG_DIR_NAME } from './config.js';
+import { getProjectStateDir } from './config.js';
 import { HEARTBEAT_INTERVAL_PRESETS, type HeartbeatIntervalMinutes } from './heartbeat.js';
 
 export const GITHUB_CONFIG_FILE = 'github.json';
@@ -157,7 +156,7 @@ export const DEFAULT_STAGES: StageDefinition[] = [
 ];
 
 export function getGithubConfigPath(cwd: string): string {
-  return join(cwd, CONFIG_DIR_NAME, GITHUB_CONFIG_FILE);
+  return join(getProjectStateDir(cwd), GITHUB_CONFIG_FILE);
 }
 
 function isValidStage(x: unknown): x is StageDefinition {
@@ -222,23 +221,6 @@ export function deleteGithubConnection(cwd: string): boolean {
   } catch {
     return false;
   }
-}
-
-/** Ensure `.harnext/github.json` is gitignored (contains repo scope + prompt). */
-export function ensureGithubGitignore(cwd: string): void {
-  const gitignorePath = join(cwd, '.gitignore');
-  const entry = `${CONFIG_DIR_NAME}/${GITHUB_CONFIG_FILE}`;
-  let existing = '';
-  if (existsSync(gitignorePath)) {
-    existing = readFileSync(gitignorePath, 'utf-8');
-  } else {
-    mkdirSync(dirname(gitignorePath), { recursive: true });
-  }
-  const lines = new Set(existing.split('\n').map((l) => l.trim()));
-  if (lines.has(entry)) return;
-  const prefix = existing.length > 0 && !existing.endsWith('\n') ? '\n' : '';
-  const block = `${prefix}# harnext: github connection config\n${entry}\n`;
-  appendFileSync(gitignorePath, block, 'utf-8');
 }
 
 // ── gh CLI wrappers ─────────────────────────────────────────────────
