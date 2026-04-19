@@ -59,7 +59,7 @@ export async function createAgentSession(
   options: CreateAgentSessionOptions = {},
 ): Promise<CreateAgentSessionResult> {
   const provider = options.provider ?? 'anthropic';
-  const modelId = options.modelId ?? 'claude-sonnet-4-6';
+  const modelId = options.modelId ?? '';
   const cwd = options.cwd ?? process.cwd();
   const thinkingLevel: ThinkingLevel = options.thinkingLevel ?? 'off';
 
@@ -83,16 +83,23 @@ export async function createAgentSession(
   // Load skills from project-local + user-wide dirs. SDK callers can pre-load and pass in.
   // On first run, seed bundled starter skills into `~/.harnext/skills/` before loading.
   let skills: Skill[];
+  const diagnostics: CreateAgentSessionResult['diagnostics'] = [];
   if (options.skills) {
     skills = options.skills;
   } else {
     const seed = seedBuiltinSkills();
     for (const d of seed.diagnostics) {
-      console.warn(`[harnext] seed ${d.type}: ${d.message} (${d.path})`);
+      diagnostics.push({ source: 'seed', type: d.type, message: d.message, path: d.path });
+      if (!options.quiet) {
+        console.warn(`[harnext] seed ${d.type}: ${d.message} (${d.path})`);
+      }
     }
-    const { skills: loaded, diagnostics } = loadSkills({ cwd });
-    for (const d of diagnostics) {
-      console.warn(`[harnext] skill ${d.type}: ${d.message} (${d.path})`);
+    const { skills: loaded, diagnostics: skillDiagnostics } = loadSkills({ cwd });
+    for (const d of skillDiagnostics) {
+      diagnostics.push({ source: 'skill', type: d.type, message: d.message, path: d.path });
+      if (!options.quiet) {
+        console.warn(`[harnext] skill ${d.type}: ${d.message} (${d.path})`);
+      }
     }
     skills = loaded;
   }
@@ -134,5 +141,5 @@ export async function createAgentSession(
     skills,
   });
 
-  return { session };
+  return { session, diagnostics };
 }

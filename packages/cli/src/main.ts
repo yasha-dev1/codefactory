@@ -27,7 +27,7 @@ import {
 } from './modes/index.js';
 
 const FALLBACK_PROVIDER = 'anthropic';
-const FALLBACK_MODEL = 'claude-sonnet-4-6';
+const FALLBACK_MODEL = '';
 
 export async function main(argv: string[]): Promise<void> {
   const args = parseArgs(argv);
@@ -127,6 +127,7 @@ async function runHeartbeat(
       modelId: resolvedModel,
       cwd,
       thinkingLevel,
+      quiet: true,
     });
     return await runHeartbeatMode(session, { cwd, name, prompt: config.prompt });
   } catch (err) {
@@ -173,12 +174,26 @@ async function runGithubPoll(cwd: string, thinkingLevel: ThinkingLevel): Promise
     FALLBACK_MODEL;
 
   try {
-    const { session } = await createAgentSession({
+    const { session, diagnostics } = await createAgentSession({
       provider: resolvedProvider,
       modelId: resolvedModel,
       cwd,
       thinkingLevel,
+      quiet: true,
     });
+    for (const d of diagnostics) {
+      appendGithubPollTick(cwd, {
+        ts: new Date().toISOString(),
+        itemNumber: -1,
+        itemKind: 'issue',
+        stageId: `(${d.source}-${d.type})`,
+        stageLabel: '',
+        mode: 'yolo',
+        exit: 0,
+        durationMs: 0,
+        output: `${d.message} (${d.path})`,
+      });
+    }
     return await runGithubPollMode(session, { cwd, config });
   } catch (err) {
     appendGithubPollTick(cwd, {
