@@ -45,6 +45,8 @@ export async function runPrintMode(
     await session.prompt(options.initialMessage);
   } catch {
     hasError = true;
+  } finally {
+    await session.dispose();
   }
 
   if (lastAssistantText) {

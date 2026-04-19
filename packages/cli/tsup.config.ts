@@ -10,6 +10,7 @@ export default defineConfig({
   sourcemap: true,
   dts: false,
   noExternal: [/@harnext\/core/],
+  external: ['@modelcontextprotocol/sdk', 'cross-spawn'],
   banner: {
     js: '#!/usr/bin/env node',
   },

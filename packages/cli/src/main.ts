@@ -23,6 +23,7 @@ import {
   runGithubPollMode,
   runHeartbeatMode,
   runInteractiveMode,
+  runMcpMode,
   runPrintMode,
 } from './modes/index.js';
 
@@ -57,6 +58,11 @@ export async function main(argv: string[]): Promise<void> {
     process.exit(exitCode);
   }
 
+  if (args.mode === 'mcp') {
+    const exitCode = await runMcpMode(args);
+    process.exit(exitCode);
+  }
+
   // Resolve provider/model: CLI flags > saved preferences > provider's built-in default > fallback.
   const prefs = loadPreferences();
   const resolvedProvider = args.provider ?? prefs.defaultProvider ?? FALLBACK_PROVIDER;
@@ -83,10 +89,14 @@ export async function main(argv: string[]): Promise<void> {
     });
     process.exit(exitCode);
   } else {
-    await runInteractiveMode(session, {
-      provider,
-      model,
-    });
+    try {
+      await runInteractiveMode(session, {
+        provider,
+        model,
+      });
+    } finally {
+      await session.dispose();
+    }
   }
 }
 

@@ -15,6 +15,7 @@ import chalk from 'chalk';
 
 import { runConnectGithubCommand } from '../../cli/github-prompt.js';
 import { runHeartbeatCommand } from '../../cli/heartbeat-prompt.js';
+import { runMcpPanel } from './mcp-panel.js';
 import { createTextarea } from '../../cli/input.js';
 import type { Textarea } from '../../cli/input.js';
 import { pickModel } from '../../cli/model-picker.js';
@@ -167,6 +168,14 @@ const SLASH_COMMANDS: SlashCommand[] = [
         cliPath: process.argv[1] ?? '',
         nodePath: process.execPath,
       });
+      return true;
+    },
+  },
+  {
+    name: '/mcp',
+    description: 'Manage MCP servers (list, add, remove, reconnect)',
+    action: async () => {
+      await runMcpPanel(process.cwd());
       return true;
     },
   },

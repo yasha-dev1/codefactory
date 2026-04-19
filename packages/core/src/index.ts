@@ -214,6 +214,55 @@ export {
 } from './providers.js';
 
 export {
+  isValidServerName,
+  getMcpConfigPath,
+  loadMcpConfig,
+  saveMcpConfig,
+  addMcpServer,
+  removeMcpServer,
+  loadMergedConfig,
+  type McpLifecycle,
+  type McpToolPrefix,
+  type McpScope,
+  type McpServerConfig,
+  type McpSettings,
+  type McpConfigFile,
+  type McpMergedConfig,
+} from './mcp-config.js';
+
+export {
+  getMcpCachePath,
+  loadMcpCache,
+  saveMcpCache,
+  deleteMcpCacheEntry,
+  computeServerConfigHash,
+  isServerCacheValid,
+  type CachedMcpTool,
+  type ServerCacheEntry,
+  type MetadataCache,
+} from './mcp-cache.js';
+
+export {
+  McpServerManager,
+  type McpTool,
+  type McpToolResult,
+} from './mcp-server-manager.js';
+
+export {
+  createMcpProxyTool,
+  type McpProxyParams,
+  type McpProxyToolDetails,
+  type CreateMcpProxyToolOptions,
+} from './mcp-proxy-tool.js';
+
+export {
+  wrapMcpToolAsAgentTool,
+  prefixedName,
+  normalizeMcpContent,
+  type DirectToolDetails,
+} from './mcp-direct-tool.js';
+
+export {
   codingTools,
   allTools,
   createCodingTools,

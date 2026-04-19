@@ -7,6 +7,7 @@ import type {
 } from '@mariozechner/pi-agent-core';
 import type { Model } from '@mariozechner/pi-ai';
 
+import type { McpServerManager } from './mcp-server-manager.js';
 import type { Skill } from './skills.js';
 
 export interface AgentSessionConfig {
@@ -16,6 +17,7 @@ export interface AgentSessionConfig {
   tools: AgentTool<any>[];
   thinkingLevel: ThinkingLevel;
   skills: Skill[];
+  mcpManager?: McpServerManager;
 }
 
 export type AgentSessionEventListener = (event: AgentEvent, signal: AbortSignal) => Promise<void> | void;
@@ -64,5 +66,13 @@ export class AgentSession {
 
   get skills(): Skill[] {
     return this.config.skills;
+  }
+
+  get mcpManager(): McpServerManager | undefined {
+    return this.config.mcpManager;
+  }
+
+  async dispose(): Promise<void> {
+    await this.config.mcpManager?.disconnectAll();
   }
 }
