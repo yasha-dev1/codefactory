@@ -32,10 +32,21 @@ export interface CreateAgentSessionOptions {
   compaction?: CompactionOptions | false;
   /** Pre-loaded skills (SDK escape hatch; skips project-dir discovery when provided) */
   skills?: Skill[];
+  /**
+   * Suppress console output of seed/skill diagnostics. Headless callers
+   * (cron ticks, tests) use this to keep their log streams clean; diagnostics
+   * are still returned via the result so callers can surface them their own way.
+   */
+  quiet?: boolean;
 }
 
 export interface CreateAgentSessionResult {
   session: AgentSession;
+  /**
+   * Seed + skill-loading diagnostics emitted while building the session. When
+   * `quiet: true` this is the only way to observe them.
+   */
+  diagnostics: Array<{ source: 'seed' | 'skill'; type: string; message: string; path: string }>;
 }
 
 function convertToLlm(messages: AgentMessage[]): Message[] {

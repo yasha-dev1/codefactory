@@ -13,7 +13,7 @@ import { dirname, join } from 'node:path';
 
 import { CONFIG_DIR_NAME } from './config.js';
 
-export const HEARTBEAT_INTERVAL_PRESETS = [15, 30, 60, 120, 360, 720, 1440] as const;
+export const HEARTBEAT_INTERVAL_PRESETS = [1, 3, 5, 15, 30, 60, 120, 360, 720, 1440] as const;
 export type HeartbeatIntervalMinutes = (typeof HEARTBEAT_INTERVAL_PRESETS)[number];
 
 export const HEARTBEATS_DIR_NAME = 'heartbeats';
@@ -164,6 +164,8 @@ export interface CronLineOptions {
   name: string;
   tag: string;
   nodePath?: string;
+  /** PATH value to inject so the tick can find user-installed binaries (e.g. `gh`). */
+  path?: string;
 }
 
 /**
@@ -173,9 +175,10 @@ export interface CronLineOptions {
 export function buildCronLine(opts: CronLineOptions): string {
   const node = opts.nodePath ?? 'node';
   const logPath = getHeartbeatPaths(opts.cwd, opts.name).log;
+  const pathPrefix = opts.path ? `PATH=${shellQuote(opts.path)} ` : '';
   const cmd =
     `cd ${shellQuote(opts.cwd)} && ` +
-    `${shellQuote(node)} ${shellQuote(opts.cliPath)} --heartbeat ${shellQuote(opts.name)} ` +
+    `${pathPrefix}${shellQuote(node)} ${shellQuote(opts.cliPath)} --heartbeat ${shellQuote(opts.name)} ` +
     `>> ${shellQuote(logPath)} 2>&1`;
   return `${opts.schedule} ${cmd} # ${opts.tag}`;
 }

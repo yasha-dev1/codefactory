@@ -11,6 +11,7 @@ import {
 import type { EnsureResult } from '@harnext/core';
 import chalk from 'chalk';
 
+import { runConnectGithubCommand } from '../../cli/github-prompt.js';
 import { runHeartbeatCommand } from '../../cli/heartbeat-prompt.js';
 import { createTextarea } from '../../cli/input.js';
 import type { Textarea } from '../../cli/input.js';
@@ -148,6 +149,18 @@ const SLASH_COMMANDS: SlashCommand[] = [
     description: 'Configure a cron-driven heartbeat for this project',
     action: async () => {
       await runHeartbeatCommand({
+        cwd: process.cwd(),
+        cliPath: process.argv[1] ?? '',
+        nodePath: process.execPath,
+      });
+      return true;
+    },
+  },
+  {
+    name: '/connect-github',
+    description: 'Connect this project to a GitHub repo and its issue pipeline',
+    action: async () => {
+      await runConnectGithubCommand({
         cwd: process.cwd(),
         cliPath: process.argv[1] ?? '',
         nodePath: process.execPath,

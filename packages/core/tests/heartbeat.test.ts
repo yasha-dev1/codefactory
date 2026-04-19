@@ -127,6 +127,20 @@ describe('buildCronLine', () => {
     expect(line).toContain(`'/opt/with space/cli.js'`);
     expect(line).toContain(`'/home/u/my proj'`);
   });
+
+  it('injects PATH when provided', () => {
+    const line = buildCronLine({
+      schedule: '*/15 * * * *',
+      cliPath: '/opt/cli.js',
+      cwd: '/home/u/proj',
+      name: 'ci',
+      tag: 'harnext:heartbeat:abc:ci',
+      nodePath: '/usr/bin/node',
+      path: '/home/linuxbrew/.linuxbrew/bin:/usr/bin:/bin',
+    });
+    expect(line).toContain('PATH=/home/linuxbrew/.linuxbrew/bin:/usr/bin:/bin');
+    expect(line).toMatch(/cd \/home\/u\/proj && PATH=\S+ \/usr\/bin\/node /);
+  });
 });
 
 describe('config load/save/delete/list', () => {

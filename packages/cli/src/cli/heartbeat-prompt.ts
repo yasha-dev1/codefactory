@@ -232,6 +232,7 @@ async function installFlow(
     name: draft.name,
     tag,
     nodePath: opts.nodePath,
+    path: process.env.PATH,
   });
 
   console.log();
