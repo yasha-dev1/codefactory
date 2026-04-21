@@ -120,9 +120,9 @@ When triggered via \`workflow_dispatch\` (issue mode):
    - The agent must not introduce regressions — if a check was passing at baseline, it must still pass after changes
 
 5. **Build implementation prompt**:
-   - Read the implementer prompt from \`.codefactory/prompts/issue-implementer.md\`
+   - Inline the implementer prompt template as a JavaScript string array inside the \`actions/github-script\` step — do NOT read it from a separate file.
    - Parse \`ISSUE_JSON\` (from fetched data or event payload) to extract issue fields
-   - Combine: prompt template + issue details + ${instructionFile} conventions + harness config + baseline state
+   - Combine: inline prompt template + issue details + ${instructionFile} conventions + harness config + baseline state
    - For workflow_dispatch: use \`(issue.user || {}).login || 'unknown'\` for safe author access
 
 6. **Agent execution**:
@@ -213,25 +213,7 @@ ${prefs.strictnessLevel === 'strict' ? '- Agent must pass ALL quality gates (lin
 
 ### 2. Implementer prompt
 
-The implementer agent's instructions are stored at \`.codefactory/prompts/issue-implementer.md\` in the repository. This file is managed by the CodeFactory CLI and can be customized by the team.
-
-**The workflow must read this file at runtime** and pass its contents to Claude as the system prompt. Use a multi-line HEREDOC output pattern:
-\`\`\`yaml
-- name: Read implementer prompt
-  id: prompt-file
-  run: |
-    if [[ -f ".codefactory/prompts/issue-implementer.md" ]]; then
-      {
-        echo "content<<PROMPT_EOF"
-        cat .codefactory/prompts/issue-implementer.md
-        echo "PROMPT_EOF"
-      } >> "$GITHUB_OUTPUT"
-    else
-      echo "content=Implement the feature or fix described in the issue." >> "$GITHUB_OUTPUT"
-    fi
-\`\`\`
-
-Do NOT generate a separate \`scripts/issue-implementer-prompt.md\` file. The prompt lives in \`.codefactory/prompts/issue-implementer.md\` and is the single source of truth.
+Inline the implementer agent's instructions directly into the workflow YAML as a JavaScript string array inside the \`actions/github-script\` step that builds the prompt. Do NOT generate a separate prompt file or read from a \`.md\` file at runtime — the prompt lives in the workflow itself so it stays version-controlled alongside the rest of the pipeline.
 
 ### 3. scripts/issue-implementer-guard.ts
 
@@ -260,7 +242,7 @@ The script:
 
 ## Critical: No Plan Mode in CI
 
-The generated \`.codefactory/prompts/issue-implementer.md\` MUST instruct the agent to **never use plan mode** (\`EnterPlanMode\`/\`ExitPlanMode\`). The agent runs in CI with no human to approve plans. If it enters plan mode, it will stall and the workflow will produce zero file changes. The prompt must explicitly say: "Execute changes directly using Read, Write, Edit, and Bash tools. Do NOT call EnterPlanMode or ExitPlanMode."
+The generated inline implementer prompt MUST instruct the agent to **never use plan mode** (\`EnterPlanMode\`/\`ExitPlanMode\`). The agent runs in CI with no human to approve plans. If it enters plan mode, it will stall and the workflow will produce zero file changes. The prompt must explicitly say: "Execute changes directly using Read, Write, Edit, and Bash tools. Do NOT call EnterPlanMode or ExitPlanMode."
 
 Similarly, the agent must NOT run git commands (commit, push) — the CI workflow handles all git operations after the agent finishes.
 

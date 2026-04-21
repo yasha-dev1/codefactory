@@ -115,7 +115,7 @@ describe('issueImplementerHarness', () => {
       '.github/workflows/issue-implementer.yml',
       'scripts/issue-implementer-guard.ts',
     ]);
-    expect(output.metadata?.promptFile).toBe('.codefactory/prompts/issue-implementer.md');
+    expect(output.metadata?.promptFile).toBeUndefined();
   });
 
   it('should wrap errors with descriptive message', async () => {

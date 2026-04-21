@@ -26,7 +26,6 @@ export const issuePlannerHarness: HarnessModule = {
     const platform = ctx.runner.platform;
     const refWorkflow = buildIssuePlannerWorkflowYml(detection, instructionFile, platform);
     const refGuard = buildIssuePlannerGuardTs();
-    const refPromptMd = buildIssuePlannerPromptMd(instructionFile);
 
     // 2. Build the prompt with reference context
     const basePrompt = buildIssuePlannerPrompt(detection, userPreferences, instructionFile);
@@ -46,11 +45,6 @@ ${refWorkflow}
 ### Reference: scripts/issue-planner-guard.ts
 \`\`\`typescript
 ${refGuard}
-\`\`\`
-
-### Reference: .codefactory/prompts/issue-planner.md
-\`\`\`markdown
-${refPromptMd}
 \`\`\``;
 
     // 3. Call AI runner
@@ -208,32 +202,54 @@ jobs:
               }
             }
 
-      - name: Read planner prompt
-        if: steps.guard.outputs.should-plan == 'true'
-        id: prompt-file
-        run: |
-          if [[ -f ".codefactory/prompts/issue-planner.md" ]]; then
-            {
-              echo "content<<PROMPT_EOF"
-              cat .codefactory/prompts/issue-planner.md
-              echo "PROMPT_EOF"
-            } >> "$GITHUB_OUTPUT"
-          else
-            echo "content=Analyze this issue and produce a structured implementation plan." >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Build planning prompt
         if: steps.guard.outputs.should-plan == 'true'
         id: build-prompt
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         env:
-          PLANNER_TEMPLATE: \${{ steps.prompt-file.outputs.content }}
           ISSUE_JSON: \${{ github.event_name == 'workflow_dispatch' && steps.fetch-issue.outputs.json || toJSON(github.event.issue) }}
         with:
           script: |
             const fs = require('fs');
             const issue = JSON.parse(process.env.ISSUE_JSON || '{}');
-            const template = process.env.PLANNER_TEMPLATE || '';
+            const template = [
+              '# Issue Planner Agent Instructions',
+              '',
+              'You are a planning agent. Your task is to analyze a GitHub issue and produce a structured implementation plan. You do NOT write code \\u2014 you produce a plan that the implementation agent will follow.',
+              '',
+              '## Rules',
+              '',
+              '1. **Understand the issue**: Parse the issue title and body to understand what needs to be built. Identify acceptance criteria if present.',
+              '2. **Read-only analysis**: You MUST NOT modify any files. Use only Read, Glob, Grep, and Bash (for read-only commands).',
+              '3. **No plan mode**: Do NOT call \\\`EnterPlanMode\\\` or \\\`ExitPlanMode\\\`. You are running in CI with no human to approve plans. Output your plan directly.',
+              '4. **No git commands**: Do NOT run git commit, git push, or any commands that modify repository state.',
+              '',
+              '## Plan Structure',
+              '',
+              'Your output MUST follow this exact structure:',
+              '',
+              '### Files to Modify',
+              'List every file that needs changes, with a brief description of what changes are needed.',
+              '',
+              '### Files to Create',
+              'List any new files that need to be created, with a description of their purpose and contents.',
+              '',
+              '### Approach',
+              'Step-by-step description of the implementation approach.',
+              '',
+              '### Test Strategy',
+              '- Which test files need updates',
+              '- What new test cases to add',
+              '- Edge cases to cover',
+              '',
+              '### Risk Assessment',
+              '- **Risk tier**: Tier 1 (docs), Tier 2 (features), or Tier 3 (critical paths)',
+              '- **Affected architectural layers**',
+              '- **Breaking changes**',
+              '- **Dependencies**: New dependencies required (if any)',
+              '',
+              'Return ONLY the structured plan. No markdown fences around the entire output, no extra commentary.',
+            ].join('\\n');
 
             let conventions = '';
             try { conventions = fs.readFileSync('${instructionFile}', 'utf-8').slice(0, 6000); } catch {}
@@ -691,64 +707,6 @@ if (process.argv.includes('--self-test')) {
 
   console.log('\\n\u2714 All self-tests passed.');
 }
-`;
-}
-
-function buildIssuePlannerPromptMd(instructionFile: string): string {
-  return `# Issue Planner Agent Instructions
-
-You are a planning agent. Your task is to analyze a GitHub issue and produce a structured implementation plan. You do NOT write code \u2014 you produce a plan that the implementation agent will follow.
-
-## Rules
-
-1. **Read first**: Before planning, read ${instructionFile} for project conventions and harness.config.json for architectural boundaries.
-2. **Understand the issue**: Parse the issue title and body to understand what needs to be built. Identify acceptance criteria if present.
-3. **Read-only analysis**: You MUST NOT modify any files. Use only Read, Glob, Grep, and Bash (for read-only commands like \`ls\`, \`git log\`) to explore the codebase. Do NOT call Write, Edit, NotebookEdit, or any file-modifying tools.
-4. **No plan mode**: Do NOT call \`EnterPlanMode\` or \`ExitPlanMode\`. You are running in CI with no human to approve plans. Output your plan directly.
-5. **No git commands**: Do NOT run git commit, git push, or any commands that modify repository state.
-
-## Plan Structure
-
-Your output MUST follow this exact structure:
-
-### Files to Modify
-
-List every file that needs changes, with a brief description of what changes are needed.
-
-### Files to Create
-
-List any new files that need to be created, with a description of their purpose and contents.
-
-### Approach
-
-Step-by-step description of the implementation approach. Be specific about:
-
-- Which functions/classes to modify
-- What new functions/classes to add
-- How the changes integrate with existing code
-
-### Test Strategy
-
-- Which test files need updates
-- What new test cases to add
-- Edge cases to cover
-
-### Risk Assessment
-
-- **Risk tier**: Tier 1 (docs), Tier 2 (features), or Tier 3 (critical paths)
-- **Affected architectural layers**: List which layers are touched
-- **Breaking changes**: Any potential breaking changes
-- **Dependencies**: New dependencies required (if any)
-
-## Guidelines
-
-- Keep the plan focused on the minimal changes needed to satisfy the issue
-- Follow existing patterns and conventions observed in the codebase
-- Flag any ambiguities or concerns that the implementation agent should be aware of
-- If the issue is unclear or underspecified, note what assumptions you are making
-- Consider the project's architectural boundaries when planning changes
-
-Return ONLY the structured plan. No markdown fences around the entire output, no extra commentary.
 `;
 }
 

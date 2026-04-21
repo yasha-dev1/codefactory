@@ -90,7 +90,7 @@ describe('reviewAgentHarness', () => {
     expect(prompt).toContain('### Reference: .github/workflows/review-agent-rerun.yml');
     expect(prompt).toContain('### Reference: .github/workflows/auto-resolve-threads.yml');
     expect(prompt).toContain('### Reference: scripts/review-agent-utils.ts');
-    expect(prompt).toContain('### Reference: .codefactory/prompts/review-agent.md');
+    expect(prompt).not.toContain('.codefactory/prompts/review-agent.md');
     expect(systemPrompt).toBe('mocked system prompt');
   });
 
@@ -192,13 +192,16 @@ describe('reviewAgentHarness', () => {
       expect(prompt).toContain('Tier 1 change — review agent not required');
     });
 
-    it('should read review prompt from .codefactory/prompts/review-agent.md', async () => {
+    it('should inline review prompt template in the reference workflow', async () => {
       const ctx = createMockContext();
       await reviewAgentHarness.execute(ctx);
 
       const [prompt] = (ctx.runner.generate as ReturnType<typeof vi.fn>).mock.calls[0];
-      expect(prompt).toContain('git show origin/main:.codefactory/prompts/review-agent.md');
-      expect(prompt).not.toContain('git show origin/main:scripts/review-prompt.md');
+      // The prompt template is inlined as a JS array — no external file read.
+      expect(prompt).toContain('const REVIEW_TEMPLATE = [');
+      expect(prompt).toContain('# Review Agent Instructions');
+      expect(prompt).not.toContain('.codefactory/prompts/review-agent.md');
+      expect(prompt).not.toContain('scripts/review-prompt.md');
     });
 
     it('should set correct permissions including issues: write and actions: write', async () => {

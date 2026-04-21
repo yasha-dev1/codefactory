@@ -85,7 +85,7 @@ describe('issuePlannerHarness', () => {
     expect(prompt).toContain('## Reference Implementation');
     expect(prompt).toContain('### Reference: .github/workflows/issue-planner.yml');
     expect(prompt).toContain('### Reference: scripts/issue-planner-guard.ts');
-    expect(prompt).toContain('### Reference: .codefactory/prompts/issue-planner.md');
+    expect(prompt).not.toContain('.codefactory/prompts/issue-planner.md');
     expect(systemPrompt).toBe('mocked system prompt');
   });
 

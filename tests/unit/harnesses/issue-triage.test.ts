@@ -86,7 +86,7 @@ describe('issueTriageHarness', () => {
     expect(prompt).toContain('## Reference Implementation');
     expect(prompt).toContain('### Reference: .github/workflows/issue-triage.yml');
     expect(prompt).toContain('### Reference: scripts/issue-triage-guard.ts');
-    expect(prompt).toContain('### Reference: .codefactory/prompts/issue-triage.md');
+    expect(prompt).not.toContain('.codefactory/prompts/issue-triage.md');
     expect(systemPrompt).toBe('mocked system prompt');
   });
 

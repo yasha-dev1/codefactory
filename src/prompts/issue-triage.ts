@@ -141,25 +141,9 @@ ${prefs.strictnessLevel === 'strict' ? '- Confidence threshold: 0.8\n- High comp
 
 ### 2. Triage prompt
 
-The triage agent's evaluation prompt is stored at \`.codefactory/prompts/issue-triage.md\` in the repository. This file is managed by the CodeFactory CLI and can be customized by the team.
+Inline the triage agent's evaluation prompt directly into the workflow YAML. Build it as a JavaScript string array inside the \`actions/github-script\` step that constructs the final prompt, then \`.join('\\n')\` it. Do NOT read the prompt from a separate \`.md\` file at runtime — the prompt lives in the workflow itself so it stays version-controlled alongside the rest of the pipeline.
 
-**The workflow must read this file at runtime** and pass its contents to Claude as the system prompt. Use a multi-line HEREDOC output pattern:
-\`\`\`yaml
-- name: Read triage prompt
-  id: prompt-file
-  run: |
-    if [[ -f ".codefactory/prompts/issue-triage.md" ]]; then
-      {
-        echo "content<<PROMPT_EOF"
-        cat .codefactory/prompts/issue-triage.md
-        echo "PROMPT_EOF"
-      } >> "$GITHUB_OUTPUT"
-    else
-      echo "content=Evaluate this issue for quality and actionability." >> "$GITHUB_OUTPUT"
-    fi
-\`\`\`
-
-Do NOT generate a separate \`scripts/issue-triage-prompt.md\` file. The prompt lives in \`.codefactory/prompts/issue-triage.md\` and is the single source of truth.
+Do NOT generate a separate \`scripts/issue-triage-prompt.md\` or \`.codefactory/prompts/issue-triage.md\` file.
 
 ### 3. scripts/issue-triage-guard.ts
 

@@ -153,7 +153,7 @@ describe('parseAndWriteTextOutput()', () => {
       '}',
       'export function evaluate() { return { shouldPlan: true }; }',
       '',
-      'File: .codefactory/prompts/issue-planner.md',
+      'File: docs/issue-planner.md',
       '# Issue Planner Agent Instructions',
       '',
       'You are a planning agent. Your task is to analyze a GitHub issue.',

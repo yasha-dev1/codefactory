@@ -208,8 +208,7 @@
       "generatedAt": "2026-02-20T00:00:00.000Z",
       "files": [
         "/home/yasha/Desktop/projects/codefactory/.github/workflows/issue-triage.yml",
-        "/home/yasha/Desktop/projects/codefactory/scripts/issue-triage-guard.ts",
-        "/home/yasha/Desktop/projects/codefactory/.codefactory/prompts/issue-triage.md"
+        "/home/yasha/Desktop/projects/codefactory/scripts/issue-triage-guard.ts"
       ]
     },
     {
@@ -218,8 +217,7 @@
       "generatedAt": "2026-02-20T00:00:00.000Z",
       "files": [
         "/home/yasha/Desktop/projects/codefactory/.github/workflows/issue-planner.yml",
-        "/home/yasha/Desktop/projects/codefactory/scripts/issue-planner-guard.ts",
-        "/home/yasha/Desktop/projects/codefactory/.codefactory/prompts/issue-planner.md"
+        "/home/yasha/Desktop/projects/codefactory/scripts/issue-planner-guard.ts"
       ]
     },
     {
@@ -228,8 +226,7 @@
       "generatedAt": "2026-02-20T00:00:00.000Z",
       "files": [
         "/home/yasha/Desktop/projects/codefactory/.github/workflows/issue-implementer.yml",
-        "/home/yasha/Desktop/projects/codefactory/scripts/issue-implementer-guard.ts",
-        "/home/yasha/Desktop/projects/codefactory/.codefactory/prompts/issue-implementer.md"
+        "/home/yasha/Desktop/projects/codefactory/scripts/issue-implementer-guard.ts"
       ]
     }
   ],

@@ -26,7 +26,6 @@ export const reviewAgentHarness: HarnessModule = {
     const refRerunWorkflow = buildRerunWorkflow();
     const refAutoResolveWorkflow = buildAutoResolveWorkflow();
     const refReviewAgentUtils = buildReviewAgentUtils();
-    const refCodefactoryPrompt = buildCodefactoryPrompt(instructionFile);
 
     // 2. Build the prompt with reference context
     const basePrompt = buildReviewAgentPrompt(detection, userPreferences);
@@ -56,11 +55,6 @@ ${refAutoResolveWorkflow}
 ### Reference: scripts/review-agent-utils.ts
 \`\`\`typescript
 ${refReviewAgentUtils}
-\`\`\`
-
-### Reference: .codefactory/prompts/review-agent.md
-\`\`\`markdown
-${refCodefactoryPrompt}
 \`\`\``;
 
     // 3. Call AI runner
@@ -310,35 +304,17 @@ function buildCodeReviewWorkflow(instructionFile: string, platform: AIPlatform):
     "            core.setOutput('check-run-id', checkRun.id);",
     '            core.info(`Created check run ${checkRun.id} for SHA ${headSha.slice(0, 12)}`);',
     '',
-    '      - name: Read review prompt',
-    "        if: steps.tier.outputs.tier != '1' && steps.dedup.outputs.skip != 'true'",
-    '        id: prompt-file',
-    '        run: |',
-    '          # Read from origin/main — not from the PR branch — so the prompt',
-    "          # stays up-to-date even for PRs that don't include prompt changes.",
-    '          PROMPT_CONTENT=$(git show origin/main:.codefactory/prompts/review-agent.md 2>/dev/null || echo "")',
-    '          if [[ -n "$PROMPT_CONTENT" ]]; then',
-    '            {',
-    '              echo "content<<PROMPT_EOF"',
-    '              echo "$PROMPT_CONTENT"',
-    '              echo "PROMPT_EOF"',
-    '            } >> "$GITHUB_OUTPUT"',
-    '          else',
-    '            echo "content=Review this pull request for bugs, security issues, and architectural violations." >> "$GITHUB_OUTPUT"',
-    '          fi',
-    '',
     '      - name: Build review prompt',
     "        if: steps.tier.outputs.tier != '1' && steps.dedup.outputs.skip != 'true'",
     '        id: build-prompt',
     '        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1',
     '        env:',
-    '          REVIEW_TEMPLATE: ${{ steps.prompt-file.outputs.content }}',
     '          TIER: ${{ steps.tier.outputs.tier }}',
     '          CHANGED_FILES: ${{ steps.tier.outputs.changed-files }}',
     '        with:',
     '          script: |',
     "            const fs = require('fs');",
-    "            const template = process.env.REVIEW_TEMPLATE || '';",
+    ...buildReviewPromptTemplateArrayLines(instructionFile),
     "            const tier = process.env.TIER || '2';",
     "            const changedFiles = process.env.CHANGED_FILES || '';",
     '',
@@ -349,7 +325,7 @@ function buildCodeReviewWorkflow(instructionFile: string, platform: AIPlatform):
     "            try { config = fs.readFileSync('harness.config.json', 'utf-8'); } catch {}",
     '',
     '            const sections = [',
-    '              template,',
+    '              REVIEW_TEMPLATE,',
     "              '',",
     "              '## PR Context',",
     "              '',",
@@ -1263,58 +1239,67 @@ function buildReviewAgentUtils(): string {
   return lines.join('\n') + '\n';
 }
 
-function buildCodefactoryPrompt(instructionFile: string): string {
-  return `# Review Agent Instructions
+/**
+ * Emit JS lines that initialize `REVIEW_TEMPLATE` with the review agent prompt,
+ * inlined into the workflow's `actions/github-script` step so we don't need to
+ * read from a separate `.md` file at runtime.
+ */
+function buildReviewPromptTemplateArrayLines(instructionFile: string): string[] {
+  const promptLines = [
+    '# Review Agent Instructions',
+    '',
+    'You are a code review agent. Your task is to review a pull request for quality, correctness, and adherence to project conventions.',
+    '',
+    '## Review Checklist',
+    '',
+    '### Code Quality',
+    '',
+    `- Does the code follow the project's style conventions (see ${instructionFile})?`,
+    '- Are there any obvious bugs, race conditions, or edge cases?',
+    '- Is error handling appropriate and consistent?',
+    '- Are there any security concerns (injection, XSS, secrets, etc.)?',
+    '',
+    '### Architecture',
+    '',
+    '- Does the change respect architectural boundaries (see harness.config.json)?',
+    '- Are imports following the dependency rules?',
+    '- Is the change in the right layer/module?',
+    '',
+    '### Testing',
+    '',
+    '- Are there tests for new functionality?',
+    '- Do existing tests still pass?',
+    '- Are edge cases covered?',
+    '',
+    '### Scope',
+    '',
+    '- Does the PR do only what it claims to do?',
+    '- Are there unrelated changes that should be in a separate PR?',
+    '- Is the PR a reasonable size for review?',
+    '',
+    '### Risk Assessment',
+    '',
+    '- Which risk tier does this change fall into (Tier 1/2/3)?',
+    '- Does it touch critical paths that need extra scrutiny?',
+    '- Are there any breaking changes?',
+    '',
+    '## Output Format',
+    '',
+    'Write your review in natural markdown. Include these sections:',
+    '',
+    '1. **Summary**: One paragraph overview of the changes',
+    '2. **Risk Assessment**: Confirmed tier (1/2/3) and brief reasoning',
+    '3. **Issues**: Numbered list of specific problems found (with severity, file:line, description). If none found, say so explicitly.',
+    '4. **Architecture**: Whether changes comply with boundary rules',
+    '5. **Test Coverage**: Brief assessment of test adequacy',
+    '',
+    'Do NOT output JSON. Write a clear, human-readable review.',
+    '',
+    '## Automated Feedback Loop',
+    '',
+    'A separate verdict classifier reads your review and decides APPROVE / REQUEST_CHANGES / COMMENT. If changes are requested, the implementer agent automatically fixes the blocking issues you describe. So for any blocking issue, be precise: include the exact file path, line number, and a clear actionable description. The implementer cannot fix vague feedback.',
+  ];
 
-You are a code review agent. Your task is to review a pull request for quality, correctness, and adherence to project conventions.
-
-## Review Checklist
-
-### Code Quality
-
-- Does the code follow the project's style conventions (see ${instructionFile})?
-- Are there any obvious bugs, race conditions, or edge cases?
-- Is error handling appropriate and consistent?
-- Are there any security concerns (injection, XSS, secrets, etc.)?
-
-### Architecture
-
-- Does the change respect architectural boundaries (see harness.config.json)?
-- Are imports following the dependency rules?
-- Is the change in the right layer/module?
-
-### Testing
-
-- Are there tests for new functionality?
-- Do existing tests still pass?
-- Are edge cases covered?
-
-### Scope
-
-- Does the PR do only what it claims to do?
-- Are there unrelated changes that should be in a separate PR?
-- Is the PR a reasonable size for review?
-
-### Risk Assessment
-
-- Which risk tier does this change fall into (Tier 1/2/3)?
-- Does it touch critical paths that need extra scrutiny?
-- Are there any breaking changes?
-
-## Output Format
-
-Write your review in natural markdown. Include these sections:
-
-1. **Summary**: One paragraph overview of the changes
-2. **Risk Assessment**: Confirmed tier (1/2/3) and brief reasoning
-3. **Issues**: Numbered list of specific problems found (with severity, file:line, description). If none found, say so explicitly.
-4. **Architecture**: Whether changes comply with boundary rules
-5. **Test Coverage**: Brief assessment of test adequacy
-
-Do NOT output JSON. Write a clear, human-readable review.
-
-## Automated Feedback Loop
-
-A separate verdict classifier reads your review and decides APPROVE / REQUEST_CHANGES / COMMENT. If changes are requested, the implementer agent automatically fixes the blocking issues you describe. So for any blocking issue, be precise: include the exact file path, line number, and a clear actionable description. The implementer cannot fix vague feedback.
-`;
+  const quoted = promptLines.map((line) => `              ${JSON.stringify(line)},`);
+  return ['            const REVIEW_TEMPLATE = [', ...quoted, "            ].join('\\n');"];
 }

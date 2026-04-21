@@ -133,16 +133,7 @@ Shared utility functions for review agent workflows:
 
 ### 5. Review Agent Prompt
 
-The review agent's instructions are stored at \`.codefactory/prompts/review-agent.md\` in the repository. This file is managed by the CodeFactory CLI and can be customized by the team.
-
-**The workflow must read this file at runtime** and pass its contents to Claude as the system prompt. For example in a GitHub Actions step:
-\`\`\`yaml
-- name: Read review prompt
-  id: prompt
-  run: echo "content=$(cat .codefactory/prompts/review-agent.md)" >> "$GITHUB_OUTPUT"
-\`\`\`
-
-Do NOT generate a separate \`scripts/review-prompt.md\` file. The prompt lives in \`.codefactory/prompts/review-agent.md\` and is the single source of truth.
+Inline the review agent's instructions directly into the workflow YAML as a JavaScript string array inside the \`actions/github-script\` step that builds the review prompt. Do NOT generate a separate prompt file or read from a \`.md\` file at runtime — the prompt lives in the workflow itself so it stays version-controlled alongside the rest of the pipeline.
 
 The review agent workflow should use \`${agentAction.action}\` with \`${agentAction.secretInputKey}: \${{ secrets.${agentAction.secretName} }}\` for authentication. Do NOT use raw API keys directly.
 

@@ -30,7 +30,6 @@ export const issueImplementerHarness: HarnessModule = {
             '.github/workflows/issue-implementer.yml',
             'scripts/issue-implementer-guard.ts',
           ],
-          promptFile: '.codefactory/prompts/issue-implementer.md',
         },
       };
 

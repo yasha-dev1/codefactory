@@ -1,26 +1,5 @@
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 
-// Use vi.hoisted so these are available inside vi.mock factories (which are hoisted above imports).
-const { mockPromptStoreInstance, MockPromptStore } = vi.hoisted(() => {
-  const mockPromptStoreInstance = {
-    ensureDefaults: vi.fn(),
-    list: vi
-      .fn()
-      .mockReturnValue([
-        { name: 'agent-system', displayName: 'Agent System', description: 'desc' },
-      ]),
-    getPath: vi.fn().mockReturnValue('/tmp/test/.codefactory/prompts/agent-system.md'),
-    read: vi.fn().mockResolvedValue('prompt content'),
-    write: vi.fn(),
-    resetToDefault: vi.fn(),
-    isCustomized: vi.fn().mockResolvedValue(false),
-  };
-
-  const MockPromptStore = vi.fn().mockImplementation(() => mockPromptStoreInstance);
-
-  return { mockPromptStoreInstance, MockPromptStore };
-});
-
 const { mockedBorderedInput } = vi.hoisted(() => ({
   mockedBorderedInput: vi.fn(),
 }));
@@ -77,10 +56,6 @@ vi.mock('node:fs/promises', () => ({
   mkdir: vi.fn().mockResolvedValue(undefined),
   writeFile: vi.fn().mockResolvedValue(undefined),
   chmod: vi.fn().mockResolvedValue(undefined),
-}));
-
-vi.mock('../../src/core/prompt-store.js', () => ({
-  PromptStore: MockPromptStore,
 }));
 
 vi.mock('../../src/core/worktree.js', () => ({
@@ -168,17 +143,6 @@ describe('replCommand', () => {
     return err;
   }
 
-  it('should initialize PromptStore on start', async () => {
-    setupReplStartup();
-    mockedBorderedInput.mockRejectedValueOnce(makeExitPromptError());
-
-    await expect(replCommand()).rejects.toThrow('process.exit');
-
-    expect(MockPromptStore).toHaveBeenCalledWith('/fake/repo');
-    expect(mockPromptStoreInstance.ensureDefaults).toHaveBeenCalledOnce();
-    expect(exitSpy).toHaveBeenCalledWith(0);
-  });
-
   it('should write shell-escaped paths in launcher script (happy path)', async () => {
     setupReplStartup();
     mockedHasUncommittedChanges.mockResolvedValue(false);
@@ -188,7 +152,6 @@ describe('replCommand', () => {
       path: '/tmp/worktrees/feat/my-feature',
       branchName: 'feat/my-feature',
     });
-    mockPromptStoreInstance.read.mockResolvedValue('system prompt {{branchName}} {{qualityGates}}');
     mockedOpenInNewTerminal.mockResolvedValue(undefined);
 
     // First call returns a task, second call exits
@@ -227,7 +190,6 @@ describe('replCommand', () => {
       path: '/tmp/worktrees/feat/$(malicious-cmd)',
       branchName: 'feat/$(malicious-cmd)',
     });
-    mockPromptStoreInstance.read.mockResolvedValue('system prompt {{branchName}}');
     mockedOpenInNewTerminal.mockResolvedValue(undefined);
 
     mockedBorderedInput.mockResolvedValueOnce('exploit test');
@@ -263,7 +225,6 @@ describe('replCommand', () => {
       path: "/tmp/worktrees/feat/it's-a-test",
       branchName: "feat/it's-a-test",
     });
-    mockPromptStoreInstance.read.mockResolvedValue('system prompt');
     mockedOpenInNewTerminal.mockResolvedValue(undefined);
 
     mockedBorderedInput.mockResolvedValueOnce('quote test');
@@ -292,7 +253,6 @@ describe('replCommand', () => {
     expect(mockedBorderedInput).toHaveBeenCalledWith(
       expect.objectContaining({
         commands: expect.arrayContaining([
-          expect.objectContaining({ name: 'agent-system' }),
           expect.objectContaining({ name: 'init' }),
           expect.objectContaining({ name: 'help' }),
           expect.objectContaining({ name: 'exit' }),

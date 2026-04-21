@@ -1,4 +1,3 @@
-import { spawnSync } from 'node:child_process';
 import { mkdir, writeFile, chmod } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -17,13 +16,8 @@ import { NotAGitRepoError } from '../utils/errors.js';
 import { validatePlatformCLI } from '../core/runner-factory.js';
 import { generateBranchName, createWorktree } from '../core/worktree.js';
 import { openInNewTerminal } from '../core/terminal.js';
-import type { PromptEntry } from '../core/prompt-store.js';
-import { PromptStore } from '../core/prompt-store.js';
 
-type ReplAction =
-  | { type: 'prompt'; name: string }
-  | { type: 'command'; name: string }
-  | { type: 'task'; task: string };
+type ReplAction = { type: 'command'; name: string } | { type: 'task'; task: string };
 
 const packageJsonSchema = z.object({
   scripts: z
@@ -35,6 +29,57 @@ const packageJsonSchema = z.object({
     })
     .optional(),
 });
+
+const AGENT_SYSTEM_PROMPT = `# CodeFactory Agent Session
+
+You are working in a git worktree on branch \`{{branchName}}\`.
+Your task is described in the first message. Execute it fully.
+
+## Execution Strategy
+
+SPEED FIRST:
+
+- Start coding immediately. Do not ask clarifying questions unless genuinely ambiguous.
+- Read {{instructionFile}} first for project conventions.
+- Make informed decisions rather than asking. Adjust later if needed.
+
+PARALLELIZATION:
+
+- For tasks with 3+ independent subtasks, use TeamCreate and Task tool to spawn parallel agents.
+- Each agent should own a clear, non-overlapping piece of work.
+- Coordinate via the task list. Do not duplicate effort.
+- Example: feature with API + UI + tests → spawn agents for each.
+
+## Harness Compliance
+
+This project uses harness engineering:
+
+- Read {{instructionFile}} for all project conventions.
+- Respect architectural boundaries in harness.config.json.
+- Changes to Tier 3 (critical) paths require extra test coverage.
+- Never disable linters, type checking, or test suites.
+- Do not refactor code unrelated to your task.
+
+## Quality Gates
+
+Before finishing, run ALL of these and fix any failures:
+{{qualityGates}}
+
+## Git Workflow
+
+You are on branch \`{{branchName}}\`. All commits go here.
+
+- Use conventional commits: feat:, fix:, refactor:, test:, chore:, docs:
+- Make atomic commits as you work.
+
+## When You Are Done
+
+After all quality gates pass:
+
+1. Push the branch: \`git push -u origin {{branchName}}\`
+2. Create a PR: \`gh pr create --title "<short task summary>" --body "<summary of changes, files modified, test results>"\`
+3. Print the PR URL so the user can see it.
+`;
 
 /**
  * Escape a string for safe embedding in a single-quoted bash string.
@@ -100,13 +145,8 @@ function buildQualityGates(
     : '- Check package.json for available scripts (test, lint, build, typecheck)';
 }
 
-function buildCommandChoices(prompts: PromptEntry[]) {
+function buildCommandChoices() {
   return [
-    ...prompts.map((p) => ({
-      name: `/${p.name}`,
-      value: { type: 'prompt' as const, name: p.name },
-      description: p.description,
-    })),
     {
       name: '/init',
       value: { type: 'command' as const, name: 'init' },
@@ -129,52 +169,11 @@ function showHelp(): void {
   console.log();
   console.log(chalk.bold('Usage:'));
   console.log('  Type a task description and press Enter to spawn Claude in a worktree.');
-  console.log('  Type / to browse agent prompts and commands.');
+  console.log('  Type / to browse commands.');
   console.log('  Arrow keys to navigate, Enter to select.');
-  console.log();
-  console.log(chalk.bold('Prompts:'));
-  console.log('  Select a prompt to view, edit in $EDITOR, or reset to default.');
-  console.log('  Prompts are stored in .codefactory/prompts/ and shared with your team.');
 }
 
-async function promptActions(store: PromptStore, name: string): Promise<void> {
-  const customized = await store.isCustomized(name);
-  const badge = customized ? chalk.yellow(' (customized)') : '';
-
-  const action = await selectPrompt<string>(`${chalk.bold(name)}${badge}:`, [
-    { name: 'Edit in $EDITOR', value: 'edit' },
-    { name: 'View contents', value: 'view' },
-    { name: 'Reset to default', value: 'reset' },
-    { name: chalk.dim('Back'), value: 'back' },
-  ]);
-
-  if (action === 'back') return;
-
-  if (action === 'edit') {
-    const editor = process.env.EDITOR || process.env.VISUAL || 'vi';
-    const path = store.getPath(name);
-    spawnSync(editor, [path], { stdio: 'inherit' });
-    logger.success(`Prompt "${name}" saved.`);
-  } else if (action === 'view') {
-    const content = await store.read(name);
-    console.log();
-    console.log(chalk.dim('\u2500'.repeat(60)));
-    console.log(content);
-    console.log(chalk.dim('\u2500'.repeat(60)));
-    console.log();
-  } else if (action === 'reset') {
-    const confirmed = await confirmPrompt(
-      `Reset "${name}" to default? This will overwrite your changes.`,
-      false,
-    );
-    if (confirmed) {
-      await store.resetToDefault(name);
-      logger.success(`Prompt "${name}" reset to default.`);
-    }
-  }
-}
-
-async function handleTask(task: string, repoRoot: string, store: PromptStore): Promise<void> {
+async function handleTask(task: string, repoRoot: string): Promise<void> {
   if (await hasUncommittedChanges(repoRoot)) {
     logger.warn('You have uncommitted changes in your working tree.');
     const proceed = await confirmPrompt('Continue anyway?', false);
@@ -199,12 +198,9 @@ async function handleTask(task: string, repoRoot: string, store: PromptStore): P
     createWorktree(repoRoot, branchName.trim()),
   );
 
-  // Build system prompt from prompt store
-  const template = await store.read('agent-system');
   const harnessCommands = await extractHarnessCommands(worktree.path);
   const qualityGates = buildQualityGates(harnessCommands);
-  const systemPrompt = template
-    .replace(/\{\{branchName\}\}/g, () => branchName.trim())
+  const systemPrompt = AGENT_SYSTEM_PROMPT.replace(/\{\{branchName\}\}/g, () => branchName.trim())
     .replace(/\{\{qualityGates\}\}/g, () => qualityGates)
     .replace(/\{\{instructionFile\}\}/g, 'CLAUDE.md');
 
@@ -251,12 +247,10 @@ export async function replCommand(): Promise<void> {
   validatePlatformCLI('claude');
 
   const repoRoot = await getRepoRoot();
-  const store = new PromptStore(repoRoot);
-  await store.ensureDefaults();
 
   printBanner();
 
-  const allCommands = buildCommandChoices(store.list());
+  const allCommands = buildCommandChoices();
   const slashCommands: SlashCommand[] = allCommands.map((c) => ({
     name: c.name.slice(1),
     description: c.description,
@@ -268,7 +262,7 @@ export async function replCommand(): Promise<void> {
   while (true) {
     try {
       const raw = await borderedInput({
-        hint: 'Type a task, or /command for saved prompts',
+        hint: 'Type a task, or /command for more options',
         accentColor: ACCENT,
         commands: slashCommands,
       });
@@ -303,9 +297,7 @@ export async function replCommand(): Promise<void> {
           );
         }
 
-        if (action.type === 'prompt') {
-          await promptActions(store, action.name);
-        } else if (action.type === 'command') {
+        if (action.type === 'command') {
           if (action.name === 'init') {
             const { initCommand } = await import('./init.js');
             await initCommand({});
@@ -316,7 +308,7 @@ export async function replCommand(): Promise<void> {
           }
         }
       } else {
-        await handleTask(raw, repoRoot, store);
+        await handleTask(raw, repoRoot);
       }
 
       console.log();

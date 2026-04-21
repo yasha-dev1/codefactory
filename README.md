@@ -237,17 +237,16 @@ Steps:
 1. **Run triage guard** -- `scripts/issue-triage-guard.ts` decides whether to triage (skips bot issues, duplicate triage, etc.). Detects re-triage when an author updates an issue after `needs-more-info`.
 2. **Ensure labels exist** -- creates `needs-more-info`, `agent:plan`, `agent:implement`, `triage:failed`, `needs-human-review` if missing.
 3. **Remove needs-more-info** -- on re-triage, removes the old label.
-4. **Read triage prompt** -- loads `.codefactory/prompts/issue-triage.md`.
-5. **Build prompt** -- combines template with issue number, title, author, body, labels, re-triage flag.
-6. **Run Claude triage** -- with JSON schema enforcing structured output: `actionable`, `confidence`, `missingInfo`, `summary`, `suggestedLabels`, `estimatedComplexity`.
-7. **Browser reproduction** -- if the verdict flags a UI bug and a dev server is available, runs a Puppeteer-based reproduction attempt with screenshots.
-8. **Route decision:**
+4. **Build prompt** -- combines an inline triage template with issue number, title, author, body, labels, re-triage flag.
+5. **Run Claude triage** -- with JSON schema enforcing structured output: `actionable`, `confidence`, `missingInfo`, `summary`, `suggestedLabels`, `estimatedComplexity`.
+6. **Browser reproduction** -- if the verdict flags a UI bug and a dev server is available, runs a Puppeteer-based reproduction attempt with screenshots.
+7. **Route decision:**
    - **Actionable + confidence >= 0.7** -- adds `agent:plan` label, dispatches planner.
    - **Actionable + low confidence** -- adds `needs-more-info`, asks clarifying questions.
    - **Not actionable** -- adds `needs-more-info`, lists what's missing.
    - **High complexity** -- adds `needs-human-review`.
    - **Parse failure** -- adds `triage:failed`.
-9. **Dispatch planner** -- if approved, triggers `issue-planner.yml`.
+8. **Dispatch planner** -- if approved, triggers `issue-planner.yml`.
 
 ### 8. `issue-planner.yml` -- Implementation Planning
 
@@ -256,12 +255,11 @@ Steps:
 Steps:
 
 1. **Run planner guard** -- `scripts/issue-planner-guard.ts` validates the issue should be planned.
-2. **Read planner prompt** -- loads `.codefactory/prompts/issue-planner.md`.
-3. **Build prompt** -- combines template with issue details, CLAUDE.md, harness.config.json.
-4. **Run Claude planning** -- uses Opus with Read/Glob/Grep/Bash tools (read-only). Max 30 turns. Analyzes the codebase and produces a structured implementation plan.
-5. **Post plan comment** -- posts the plan on the issue with `<!-- issue-planner: #N -->` marker.
-6. **Add `agent:implement` label** -- signals the implementer to proceed.
-7. **Dispatch implementer** -- triggers `issue-implementer.yml`.
+2. **Build prompt** -- combines an inline planner template with issue details, CLAUDE.md, harness.config.json.
+3. **Run Claude planning** -- uses Opus with Read/Glob/Grep/Bash tools (read-only). Max 30 turns. Analyzes the codebase and produces a structured implementation plan.
+4. **Post plan comment** -- posts the plan on the issue with `<!-- issue-planner: #N -->` marker.
+5. **Add `agent:implement` label** -- signals the implementer to proceed.
+6. **Dispatch implementer** -- triggers `issue-implementer.yml`.
 
 ### 9. `issue-implementer.yml` -- Issue Implementation + Review-Fix
 
@@ -275,7 +273,7 @@ Two modes:
 2. **Create branch** -- `{format}-issue-{N}` from `main`.
 3. **Run baseline validation** -- captures current lint/type-check/test/build state.
 4. **Extract plan** -- finds the planner comment (`<!-- issue-planner: #N -->`) if one exists.
-5. **Build prompt** -- combines `.codefactory/prompts/issue-implementer.md` + issue body + plan + CLAUDE.md + harness.config.json + baseline state.
+5. **Build prompt** -- combines an inline implementer template + issue body + plan + CLAUDE.md + harness.config.json + baseline state.
 6. **Run Claude implementation** -- Opus with Edit/Write/Read/Glob/Grep/Bash. Max 100 turns.
 7. **Revert protected files** -- workflows, harness config, CLAUDE.md, lock files.
 8. **Quality gates** -- lint, type-check, test, build. Only fails on regressions (if a check was passing in baseline but now fails).
@@ -365,7 +363,6 @@ codefactory init
             ├── docs/                        (architecture docs)
             ├── .husky/pre-commit            (pre-commit hooks)
             ├── scripts/                     (risk gate, structural tests, guards)
-            ├── .codefactory/prompts/        (agent prompt templates)
             ├── .github/workflows/           (14 workflow files)
             └── .github/PULL_REQUEST_TEMPLATE.md
 ```
@@ -464,12 +461,11 @@ Tier 3 critical paths include: `src/index.ts`, `src/cli.ts`, `src/commands/init.
 All agent behavior is configured through files committed to the repo:
 
 ```
-.codefactory/prompts/           Agent prompt templates (edit to change behavior)
-    ├── agent-system.md         Base system prompt for all agents
-    ├── issue-triage.md         Triage evaluation criteria
-    ├── issue-planner.md        Planning instructions
-    ├── issue-implementer.md    Implementation instructions
-    └── review-agent.md         Code review guidelines
+.github/workflows/              Generated workflows — inline agent prompts live here
+    ├── issue-triage.yml        Triage evaluation criteria
+    ├── issue-planner.yml       Planning instructions
+    ├── issue-implementer.yml   Implementation instructions
+    └── code-review-agent.yml   Code review guidelines
 
 scripts/
     ├── review-prompt.md        Review agent prompt (read from main branch)
@@ -493,8 +489,7 @@ Changes to these files take effect on the next CI run. Because they are committe
 ```
 CLI (Commander)
   ├── Default ──► REPL (interactive input with / commands)
-  │                ├── Task input ──► Worktree + Claude agent
-  │                └── /prompts ──► View/edit .codefactory/prompts/
+  │                └── Task input ──► Worktree + Claude agent
   └── init ──► Harness setup wizard
                  ├── Detector (heuristic + Claude-powered analysis)
                  └── Harness Modules (16 modules, each implementing HarnessModule)
@@ -507,13 +502,12 @@ CLI (Commander)
 - `src/core/detector.ts` -- Two-phase stack detection: fast heuristics (file existence checks, package.json parsing) followed by Claude-powered deep analysis.
 - `src/core/config.ts` -- Loads and saves `harness.config.json`.
 - `src/core/file-writer.ts` -- Tracks created and modified files during harness generation.
-- `src/core/prompt-store.ts` -- Manages `.codefactory/prompts/` with default agent prompts and CRUD operations.
 - `src/commands/init.ts` -- Orchestrates the init flow: detect, prompt, generate.
-- `src/commands/repl.ts` -- Interactive REPL with search-based input, prompt management, and task spawning.
+- `src/commands/repl.ts` -- Interactive REPL with search-based input and task spawning.
 
 **Harness modules** (`src/harnesses/`): 16 modules each exporting a `HarnessModule` with `name`, `order`, `isApplicable()`, and `execute()`. They run in dependency order and can reference outputs from earlier harnesses via `previousOutputs`.
 
-**Prompts** (`src/prompts/`): 20 prompt builders that each harness module sends to the Claude Runner for file generation. Agent-facing prompts (read at CI time) live in `.codefactory/prompts/`.
+**Prompts** (`src/prompts/`): 20 prompt builders that each harness module sends to the Claude Runner for file generation. Agent-facing prompts (used at CI time) are inlined directly into the generated workflow YAML alongside the rest of the pipeline.
 
 ## Development
 

@@ -167,7 +167,7 @@ const LANG_IDENTIFIERS = new Set([
  * Matches formats like:
  *   File: .github/workflows/issue-planner.yml
  *   # File: scripts/guard.ts
- *   ## .codefactory/prompts/planner.md
+ *   ## docs/planner.md
  *   ### .github/workflows/issue-planner.yml
  *   // File: scripts/guard.ts
  *

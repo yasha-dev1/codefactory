@@ -94,27 +94,26 @@ When triggered via \`workflow_dispatch\`:
    - Skip if the issue has blocking labels (\`agent:skip\`, \`wontfix\`, \`duplicate\`, \`invalid\`)
    - **Output**: \`should-plan\`, \`reason\`, \`issue-number\`, \`issue-title\`
 
-3. **Read planner prompt** from \`.codefactory/prompts/issue-planner.md\`
-
-4. **Build planning prompt**:
-   - Combine: prompt template + issue details + ${instructionFile} conventions + codebase structure overview
+3. **Build planning prompt**:
+   - Inline the planner prompt template as a JavaScript string array inside the \`actions/github-script\` step — do NOT read it from a separate file.
+   - Combine: inline prompt template + issue details + ${instructionFile} conventions + codebase structure overview
    - Include \`harness.config.json\` for architectural boundaries
 
-5. **Agent execution**:
+4. **Agent execution**:
    - Invoke the AI agent using \`${agentAction.action}\` with \`${agentAction.secretInputKey}: \${{ secrets.${agentAction.secretName} }}\`${agentAction.argsInputKey ? `\n   - Set \`--model claude-opus-4-6 --max-turns 30 --allowedTools "Read,Glob,Grep,Bash"\` in \`${agentAction.argsInputKey}\`` : ''}${prefs.aiPlatform === 'claude' ? `\n   - Set \`allowed_bots: 'github-actions'\` — this workflow is dispatched by the triage workflow using \`GITHUB_TOKEN\`, so the actor is \`github-actions[bot]\`. Without \`allowed_bots\`, the action rejects bot-initiated runs.` : ''}
    - The agent reads the codebase (read-only) and produces a structured plan
    - Timeout: 15 minutes
    - **IMPORTANT**: ${agentAction.executionFileOutputKey ? `The action's response is in the \`${agentAction.executionFileOutputKey}\` output (a JSON array, NOT JSONL — do NOT use \`jq -s\`). Extract the result turn: \`jq -r '[.[] | select(.type == "result")] | last | .result // ""' "$EXECUTION_FILE"\`. Fallback to last assistant text: \`jq -r '[.[] | select(.type == "assistant") | .message.content[] | select(.type == "text") | .text] | last // ""' "$EXECUTION_FILE"\`` : `The action's response is available via the \`${agentAction.textOutputKey}\` output.`}
 
-6. **Post plan as comment**:
+5. **Post plan as comment**:
    - Extract Claude's plan text from the \`execution_file\` (see above) and post as a comment on the issue
    - Include \`<!-- issue-planner: #N -->\` marker for deduplication
 
-7. **Add \`agent:implement\` label and dispatch implementer**:
+6. **Add \`agent:implement\` label and dispatch implementer**:
    - Add the \`agent:implement\` label
    - Dispatch the implementer workflow via \`gh workflow run issue-implementer.yml --field issue_number=N\`
 
-8. **Failure handler**:
+7. **Failure handler**:
    - Add \`agent:needs-judgment\` label
    - Post error comment with run link
 
@@ -127,11 +126,7 @@ concurrency:
 
 ### 2. Planner prompt
 
-The planner agent's instructions are stored at \`.codefactory/prompts/issue-planner.md\` in the repository. This file is managed by the CodeFactory CLI and can be customized by the team.
-
-**The workflow must read this file at runtime** and pass its contents to Claude as the system prompt.
-
-Do NOT generate a separate prompt file. The prompt lives in \`.codefactory/prompts/issue-planner.md\` and is the single source of truth.
+Inline the planner agent's instructions directly into the workflow YAML as a JavaScript string array inside the \`actions/github-script\` step. Do NOT generate a separate prompt file or read from a \`.md\` file at runtime — the prompt lives in the workflow itself so it stays version-controlled alongside the rest of the pipeline.
 
 ### 3. scripts/issue-planner-guard.ts
 
@@ -159,7 +154,7 @@ The script:
 
 ## Critical: No Plan Mode in CI
 
-The generated \`.codefactory/prompts/issue-planner.md\` MUST instruct the agent to **never use plan mode** (\`EnterPlanMode\`/\`ExitPlanMode\`). The agent runs in CI with no human to approve plans. It must also NOT modify any files — it is a read-only analysis agent.
+The generated inline planner prompt MUST instruct the agent to **never use plan mode** (\`EnterPlanMode\`/\`ExitPlanMode\`). The agent runs in CI with no human to approve plans. It must also NOT modify any files — it is a read-only analysis agent.
 
 ## Safety Constraints
 
