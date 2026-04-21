@@ -43,7 +43,9 @@ export class ChecksumError extends UpdateError {
 export class StageConfigWriteError extends Error {
   constructor(path: string, cause: unknown) {
     const detail = cause instanceof Error ? cause.message : String(cause);
-    super(`Failed to write stage config to ${path}: ${detail}`);
+    super(`Failed to write stage config to ${path}: ${detail}`, {
+      cause: cause instanceof Error ? cause : undefined,
+    });
     this.name = 'StageConfigWriteError';
   }
 }

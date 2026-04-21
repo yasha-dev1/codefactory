@@ -158,6 +158,18 @@ describe('saveStageConfig', () => {
     );
   });
 
+  it('should preserve the original error cause in StageConfigWriteError', async () => {
+    const readonlyDir = join(tempDir, 'readonly');
+    await mkdir(readonlyDir, { mode: 0o444 });
+    try {
+      await saveStageConfig(readonlyDir, { stages: [] });
+      expect.fail('should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).cause).toBeInstanceOf(Error);
+    }
+  });
+
   it('should produce valid JSON that round-trips through load', async () => {
     const config = {
       stages: [

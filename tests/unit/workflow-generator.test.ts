@@ -152,6 +152,19 @@ describe('generateStageWorkflow', () => {
       expect(labelStep.run).not.toContain('--add-label');
     });
 
+    it('should quote the issue reference in shell commands', () => {
+      const yaml = generateStageWorkflow({
+        stage: triageStage,
+        platform: 'claude',
+        allStages,
+      });
+      const parsed = parse(yaml);
+      const steps = parsed.jobs['run-stage'].steps;
+      const labelStep = steps[steps.length - 1];
+      const issueRef = '${{ github.event.issue.number || github.event.inputs.issue }}';
+      expect(labelStep.run).toContain(`gh issue edit "${issueRef}"`);
+    });
+
     it('should escape shell metacharacters in labels to prevent injection', () => {
       const maliciousStage: StageDefinition = {
         id: 'evil',
@@ -285,6 +298,17 @@ describe('generateStageWorkflow', () => {
       });
       const parsed = parse(yaml);
       expect(parsed.permissions['id-token']).toBeUndefined();
+    });
+
+    it('should include contents write and pull-requests write permissions', () => {
+      const yaml = generateStageWorkflow({
+        stage: triageStage,
+        platform: 'codex',
+        allStages,
+      });
+      const parsed = parse(yaml);
+      expect(parsed.permissions.contents).toBe('write');
+      expect(parsed.permissions['pull-requests']).toBe('write');
     });
   });
 

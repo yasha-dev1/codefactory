@@ -53,6 +53,11 @@ function buildPermissions(platform: AIPlatform): Record<string, string> {
     issues: 'write',
   };
 
+  if (platform === 'codex') {
+    perms['contents'] = 'write';
+    perms['pull-requests'] = 'write';
+  }
+
   if (platform === 'claude' || platform === 'kiro') {
     perms['id-token'] = 'write';
   }
@@ -185,9 +190,9 @@ function buildLabelTransitionStep(
   const nextLabel = resolveNextLabel(stage, allStages);
   const issueRef = '${{ github.event.issue.number || github.event.inputs.issue }}';
 
-  let script = `gh issue edit ${issueRef} --remove-label ${escapeShellArg(stage.label)}`;
+  let script = `gh issue edit "${issueRef}" --remove-label ${escapeShellArg(stage.label)}`;
   if (nextLabel) {
-    script += `\ngh issue edit ${issueRef} --add-label ${escapeShellArg(nextLabel)}`;
+    script += `\ngh issue edit "${issueRef}" --add-label ${escapeShellArg(nextLabel)}`;
   }
 
   return {
