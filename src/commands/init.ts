@@ -4,6 +4,7 @@ import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { logger } from '../ui/logger.js';
+import { printBrandingOnce } from '../ui/brand.js';
 import { withSpinner } from '../ui/spinner.js';
 import { confirmPrompt, selectPrompt, multiselectPrompt, inputPrompt } from '../ui/prompts.js';
 import { isGitRepo, getRepoRoot } from '../utils/git.js';
@@ -55,6 +56,8 @@ const HARNESS_SCRIPTS: Record<string, Record<string, string>> = {
 };
 
 export async function initCommand(options: InitOptions): Promise<void> {
+  printBrandingOnce();
+
   // ── 1. Pre-flight checks ─────────────────────────────────────────────
   if (!(await isGitRepo())) {
     throw new NotAGitRepoError();

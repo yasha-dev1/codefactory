@@ -9,12 +9,15 @@ import { Readable } from 'node:stream';
 import chalk from 'chalk';
 
 import { logger } from '../ui/logger.js';
+import { printBrandingOnce } from '../ui/brand.js';
 import { withSpinner } from '../ui/spinner.js';
 import { ChecksumError, NetworkError, UpdateError } from '../utils/errors.js';
 import { getPackageInfo } from '../utils/package-info.js';
 import { checkForUpdate } from '../utils/version-check.js';
 
 export async function updateCommand(options: { check?: boolean; force?: boolean }): Promise<void> {
+  printBrandingOnce();
+
   const { version: currentVersion } = getPackageInfo();
 
   try {

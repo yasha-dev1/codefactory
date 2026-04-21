@@ -1,6 +1,7 @@
 import chalk from 'chalk';
 
 import { getPackageInfo } from '../utils/package-info.js';
+import { renderFlowHuntBranding } from './brand.js';
 
 const pkg = getPackageInfo();
 
@@ -38,6 +39,8 @@ export function printBanner(): void {
     `  ${chalk.dim('Type')} ${chalk.bold('/')} ${chalk.dim('to browse commands and agent prompts')}`,
   );
   console.log(`  ${chalk.dim('Ctrl+C to exit')}`);
+  console.log();
+  console.log(`  ${renderFlowHuntBranding()}`);
   console.log();
   console.log(hr);
   console.log();
