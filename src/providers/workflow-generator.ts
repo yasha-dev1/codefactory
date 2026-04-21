@@ -167,8 +167,11 @@ function buildKiroSteps(stage: StageDefinition): Record<string, unknown>[] {
 }
 
 function buildPromptExpression(stage: StageDefinition): string {
-  const escapedPrompt = stage.prompt.replace(/'/g, "''");
-  return `${escapedPrompt}\n\nIssue context: \${{ github.event.issue.title }} — \${{ github.event.issue.body }}`;
+  return `${stage.prompt}\n\nIssue context: \${{ github.event.issue.title }} — \${{ github.event.issue.body }}`;
+}
+
+function escapeShellArg(s: string): string {
+  return `'${s.replace(/'/g, "'\\''")}'`;
 }
 
 function buildLabelTransitionStep(
@@ -178,9 +181,9 @@ function buildLabelTransitionStep(
   const nextLabel = resolveNextLabel(stage, allStages);
   const issueRef = '${{ github.event.issue.number || github.event.inputs.issue }}';
 
-  let script = `gh issue edit ${issueRef} --remove-label "${stage.label}"`;
+  let script = `gh issue edit ${issueRef} --remove-label ${escapeShellArg(stage.label)}`;
   if (nextLabel) {
-    script += `\ngh issue edit ${issueRef} --add-label "${nextLabel}"`;
+    script += `\ngh issue edit ${issueRef} --add-label ${escapeShellArg(nextLabel)}`;
   }
 
   return {

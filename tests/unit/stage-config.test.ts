@@ -1,3 +1,4 @@
+import { vi } from 'vitest';
 import { mkdtemp, rm, readFile, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -63,12 +64,15 @@ describe('loadStageConfig', () => {
     expect(result!.stages[0].runner).toEqual({ location: 'local' });
   });
 
-  it('should return null for malformed JSON', async () => {
+  it('should return null for malformed JSON and log a warning', async () => {
     await mkdir(join(tempDir, '.harnext'), { recursive: true });
     await writeFile(join(tempDir, '.harnext', 'github.json'), 'not-json{{{');
 
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const result = await loadStageConfig(tempDir);
     expect(result).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('[stage-config]'));
+    warnSpy.mockRestore();
   });
 
   it('should handle empty stages array', async () => {
@@ -134,6 +138,15 @@ describe('saveStageConfig', () => {
 
     const raw = await readFile(join(tempDir, '.harnext', 'github.json'), 'utf-8');
     expect(JSON.parse(raw).stages).toEqual([]);
+  });
+
+  it('should not mutate the input config object', async () => {
+    const config = {
+      stages: [],
+      updatedAt: 'original-value',
+    };
+    await saveStageConfig(tempDir, config);
+    expect(config.updatedAt).toBe('original-value');
   });
 
   it('should produce valid JSON that round-trips through load', async () => {

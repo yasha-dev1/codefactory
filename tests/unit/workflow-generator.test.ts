@@ -115,8 +115,8 @@ describe('generateStageWorkflow', () => {
       const parsed = parse(yaml);
       const steps = parsed.jobs['run-stage'].steps;
       const labelStep = steps[steps.length - 1];
-      expect(labelStep.run).toContain('--remove-label "harnext:triage"');
-      expect(labelStep.run).toContain('--add-label "harnext:implement"');
+      expect(labelStep.run).toContain("--remove-label 'harnext:triage'");
+      expect(labelStep.run).toContain("--add-label 'harnext:implement'");
     });
 
     it('should transition to awaiting-approval for human-approval mode', () => {
@@ -128,8 +128,8 @@ describe('generateStageWorkflow', () => {
       const parsed = parse(yaml);
       const steps = parsed.jobs['run-stage'].steps;
       const labelStep = steps[steps.length - 1];
-      expect(labelStep.run).toContain('--remove-label "harnext:implement"');
-      expect(labelStep.run).toContain('--add-label "harnext:awaiting-approval"');
+      expect(labelStep.run).toContain("--remove-label 'harnext:implement'");
+      expect(labelStep.run).toContain("--add-label 'harnext:awaiting-approval'");
     });
 
     it('should only remove label for last yolo stage with no next stage', () => {
@@ -148,8 +148,47 @@ describe('generateStageWorkflow', () => {
       const parsed = parse(yaml);
       const steps = parsed.jobs['run-stage'].steps;
       const labelStep = steps[steps.length - 1];
-      expect(labelStep.run).toContain('--remove-label "harnext:only"');
+      expect(labelStep.run).toContain("--remove-label 'harnext:only'");
       expect(labelStep.run).not.toContain('--add-label');
+    });
+
+    it('should escape shell metacharacters in labels to prevent injection', () => {
+      const maliciousStage: StageDefinition = {
+        id: 'evil',
+        label: 'harnext:triage"; rm -rf /',
+        prompt: 'Triage this',
+        mode: 'yolo',
+        runner: { location: 'github-actions', workflowFile: '', generated: true },
+      };
+      const yaml = generateStageWorkflow({
+        stage: maliciousStage,
+        platform: 'claude',
+        allStages: [maliciousStage],
+      });
+      const parsed = parse(yaml);
+      const steps = parsed.jobs['run-stage'].steps;
+      const labelStep = steps[steps.length - 1];
+      expect(labelStep.run).not.toContain('--remove-label "');
+      expect(labelStep.run).toContain("--remove-label 'harnext:triage\"; rm -rf /'");
+    });
+
+    it('should POSIX-escape labels containing single quotes', () => {
+      const stageWithQuote: StageDefinition = {
+        id: 'quoted',
+        label: "it's-a-label",
+        prompt: 'Do work',
+        mode: 'yolo',
+        runner: { location: 'local' },
+      };
+      const yaml = generateStageWorkflow({
+        stage: stageWithQuote,
+        platform: 'claude',
+        allStages: [stageWithQuote],
+      });
+      const parsed = parse(yaml);
+      const steps = parsed.jobs['run-stage'].steps;
+      const labelStep = steps[steps.length - 1];
+      expect(labelStep.run).toContain("--remove-label 'it'\\''s-a-label'");
     });
   });
 

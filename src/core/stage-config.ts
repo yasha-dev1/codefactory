@@ -28,7 +28,10 @@ export async function loadStageConfig(repoRoot: string): Promise<StageConfig | n
       codingAgent: typeof parsed['codingAgent'] === 'string' ? parsed['codingAgent'] : undefined,
       updatedAt: typeof parsed['updatedAt'] === 'string' ? parsed['updatedAt'] : undefined,
     };
-  } catch {
+  } catch (err) {
+    console.warn(
+      `[stage-config] Failed to parse ${configPath}: ${err instanceof Error ? err.message : String(err)}`,
+    );
     return null;
   }
 }
@@ -36,6 +39,6 @@ export async function loadStageConfig(repoRoot: string): Promise<StageConfig | n
 export async function saveStageConfig(repoRoot: string, config: StageConfig): Promise<void> {
   const configPath = join(repoRoot, CONFIG_DIR, CONFIG_FILENAME);
   await mkdir(dirname(configPath), { recursive: true });
-  config.updatedAt = new Date().toISOString();
-  await writeFile(configPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
+  const toWrite = { ...config, updatedAt: new Date().toISOString() };
+  await writeFile(configPath, JSON.stringify(toWrite, null, 2) + '\n', 'utf-8');
 }
