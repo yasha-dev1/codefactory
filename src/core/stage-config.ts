@@ -1,6 +1,7 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileExists } from '../utils/fs.js';
+import { StageConfigWriteError } from '../utils/errors.js';
 import type { StageConfig } from './stage-types.js';
 import { migrateStageDefinition } from './stage-types.js';
 
@@ -38,7 +39,11 @@ export async function loadStageConfig(repoRoot: string): Promise<StageConfig | n
 
 export async function saveStageConfig(repoRoot: string, config: StageConfig): Promise<void> {
   const configPath = join(repoRoot, CONFIG_DIR, CONFIG_FILENAME);
-  await mkdir(dirname(configPath), { recursive: true });
-  const toWrite = { ...config, updatedAt: new Date().toISOString() };
-  await writeFile(configPath, JSON.stringify(toWrite, null, 2) + '\n', 'utf-8');
+  try {
+    await mkdir(dirname(configPath), { recursive: true });
+    const toWrite = { ...config, updatedAt: new Date().toISOString() };
+    await writeFile(configPath, JSON.stringify(toWrite, null, 2) + '\n', 'utf-8');
+  } catch (err) {
+    throw new StageConfigWriteError(configPath, err);
+  }
 }

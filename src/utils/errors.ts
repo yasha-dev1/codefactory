@@ -40,6 +40,14 @@ export class ChecksumError extends UpdateError {
   }
 }
 
+export class StageConfigWriteError extends Error {
+  constructor(path: string, cause: unknown) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    super(`Failed to write stage config to ${path}: ${detail}`);
+    this.name = 'StageConfigWriteError';
+  }
+}
+
 const PLATFORM_INSTALL_INSTRUCTIONS: Record<string, string> = {
   claude: 'Install Claude Code: npm install -g @anthropic-ai/claude-code',
   kiro: 'Install AWS Kiro: see https://kiro.dev/docs/install',

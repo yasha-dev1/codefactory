@@ -149,6 +149,15 @@ describe('saveStageConfig', () => {
     expect(config.updatedAt).toBe('original-value');
   });
 
+  it('should throw StageConfigWriteError when directory is not writable', async () => {
+    const { StageConfigWriteError } = await import('../../src/utils/errors.js');
+    const readonlyDir = join(tempDir, 'readonly');
+    await mkdir(readonlyDir, { mode: 0o444 });
+    await expect(saveStageConfig(readonlyDir, { stages: [] })).rejects.toThrow(
+      StageConfigWriteError,
+    );
+  });
+
   it('should produce valid JSON that round-trips through load', async () => {
     const config = {
       stages: [

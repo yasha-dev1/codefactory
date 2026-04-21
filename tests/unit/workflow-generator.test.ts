@@ -172,6 +172,25 @@ describe('generateStageWorkflow', () => {
       expect(labelStep.run).toContain("--remove-label 'harnext:triage\"; rm -rf /'");
     });
 
+    it('should escape single quotes in GHA if-expression to prevent syntax errors', () => {
+      const stageWithQuote: StageDefinition = {
+        id: 'quoted',
+        label: "it's-a-label",
+        prompt: 'Do work',
+        mode: 'yolo',
+        runner: { location: 'local' },
+      };
+      const yaml = generateStageWorkflow({
+        stage: stageWithQuote,
+        platform: 'claude',
+        allStages: [stageWithQuote],
+      });
+      const parsed = parse(yaml);
+      const ifExpr = parsed.jobs['run-stage'].if;
+      expect(ifExpr).toContain("it''s-a-label");
+      expect(ifExpr).not.toContain("it's-a-label");
+    });
+
     it('should POSIX-escape labels containing single quotes', () => {
       const stageWithQuote: StageDefinition = {
         id: 'quoted',

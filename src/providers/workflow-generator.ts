@@ -70,7 +70,7 @@ function buildJob(
   return {
     name: `Run stage: ${stage.label}`,
     'runs-on': 'ubuntu-latest',
-    if: `github.event_name == 'workflow_dispatch' || (github.event.label.name == '${stage.label}')`,
+    if: `github.event_name == 'workflow_dispatch' || (github.event.label.name == '${escapeGhaExpression(stage.label)}')`,
     steps,
   };
 }
@@ -168,6 +168,10 @@ function buildKiroSteps(stage: StageDefinition): Record<string, unknown>[] {
 
 function buildPromptExpression(stage: StageDefinition): string {
   return `${stage.prompt}\n\nIssue context: \${{ github.event.issue.title }} — \${{ github.event.issue.body }}`;
+}
+
+function escapeGhaExpression(s: string): string {
+  return s.replace(/'/g, "''");
 }
 
 function escapeShellArg(s: string): string {
