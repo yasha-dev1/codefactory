@@ -1,7 +1,8 @@
 {
   "name": "@harnext/core",
   "version": "0.1.0",
-  "description": "Core library for harnext AI coding agent",
+  "description": "Core library for harnext AI coding agent (bundled into the harnext CLI; not published separately).",
+  "private": true,
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
