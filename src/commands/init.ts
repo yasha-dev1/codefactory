@@ -111,12 +111,16 @@ export async function initCommand(options: InitOptions): Promise<void> {
         { name: 'Bitbucket Pipelines', value: 'bitbucket' },
       ]);
 
-  const aiPlatform = nonInteractive
-    ? ((options.platform ?? 'claude') as AIPlatform)
-    : await selectPrompt<AIPlatform>(
-        'Which AI coding agent do you use?',
-        AI_PLATFORMS.map((p) => ({ name: `${p.name} — ${p.description}`, value: p.value })),
-      );
+  // If a caller (e.g. `setup` for a non-harnext coding agent) preselected
+  // the platform, honour it and skip the prompt even in interactive mode.
+  const aiPlatform: AIPlatform = options.platform
+    ? (options.platform as AIPlatform)
+    : nonInteractive
+      ? 'claude'
+      : await selectPrompt<AIPlatform>(
+          'Which AI coding agent do you use?',
+          AI_PLATFORMS.map((p) => ({ name: `${p.name} — ${p.description}`, value: p.value })),
+        );
 
   // Validate CLI availability
   try {

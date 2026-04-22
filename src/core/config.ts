@@ -1,6 +1,7 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileExists } from '../utils/fs.js';
+import type { CodingAgentId } from './coding-agent-registry.js';
 
 export interface HarnessConfig {
   version: string;
@@ -18,6 +19,15 @@ export interface HarnessConfig {
     generatedAt: string;
     files: string[];
   }[];
+  /**
+   * Persisted by `codefactory setup`. When pipeline runners are wired up
+   * (follow-up to issue #49) they read this field to decide which CLI to
+   * spawn and which `--model` value to pass.
+   */
+  codingAgent?: {
+    id: CodingAgentId;
+    model: string;
+  };
   generatedAt: string;
   lastUpdated: string;
 }
