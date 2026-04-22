@@ -8,25 +8,34 @@ import {
   DEFAULT_STAGES,
   GITHUB_POLL_INTERVAL_PRESETS,
   NEEDS_JUDGMENT_LABEL,
+  applyGeneratedPrompts,
   buildCronSchedule,
   buildGithubPollCronLine,
   buildHarnextLabelSpecs,
   deleteGithubConnection,
   ensureRepoLabels,
   findCronLine,
+  generateProjectSkills,
+  generateStagePrompts,
   generateStageWorkflow,
   getCodingAgentSpec,
   getGithubConfigPath,
   getGithubPollCronTag,
+  getProjectProfilePath,
   getRepoFromCwd,
   getStageRunner,
+  installBundledSkills,
   installCronLine,
   listCodingAgents,
   listRepoAssignableUsers,
   listRepoLabels,
   loadGithubConnection,
+  loadProjectProfile,
   removeCronLine,
+  resolveAgentSkillsDir,
+  runCodebaseProfiler,
   saveGithubConnection,
+  saveProjectProfile,
   setDefault,
   verifyGhAuth,
   type CodingAgentId,
@@ -36,9 +45,11 @@ import {
   type GithubIssueFilter,
   type GithubPollIntervalMinutes,
   type NormalStage,
+  type ProjectProfile,
   type ReviewLoopStage,
   type StageEntry,
   type StageMode,
+  type StagePromptSpec,
   type StageRunner,
 } from '@harnext/core';
 
@@ -1153,6 +1164,161 @@ async function removeFlow(opts: ConnectGithubOptions): Promise<void> {
 }
 
 /**
+ * Analyze-codebase step: offers to (re-)run the codebase profiler, persist
+ * the profile, install bundled skills into the agent's skills dir, generate
+ * project-specific skills, and tailor the stage prompts off the profile.
+ *
+ * Returns the stage baseline to feed into `runStagesStep` — tailored when
+ * the analysis succeeds, unchanged when the user skips or anything fails.
+ * Any failure here is soft: we warn and fall back to the baseline so the
+ * wizard never blocks the user on flaky agent runs.
+ */
+async function runAnalysisStep(
+  cwd: string,
+  codingAgent: CodingAgentId,
+  codingAgentModel: string | undefined,
+  baselineStages: StageEntry[],
+): Promise<StageEntry[]> {
+  const existing = loadProjectProfile(cwd);
+  let profile: ProjectProfile | null = null;
+
+  if (existing) {
+    console.log(chalk.dim(`    Existing profile: ${getProjectProfilePath(cwd)}`));
+    console.log(
+      chalk.dim(
+        `      language: ${existing.primaryLanguage}` +
+          (existing.framework ? `, framework: ${existing.framework}` : '') +
+          `, generated: ${existing.generatedAt.slice(0, 10)}`,
+      ),
+    );
+    type Choice = 'reuse' | 'reanalyze' | 'skip';
+    const picked = await select<Choice>(
+      [
+        { label: 'Reuse existing profile', value: 'reuse', hint: 'fast — no agent run' },
+        {
+          label: 'Re-analyze the codebase',
+          value: 'reanalyze',
+          hint: 'ask the agent again (may take 30-120s)',
+        },
+        {
+          label: 'Skip — use generic stage prompts',
+          value: 'skip',
+          hint: 'the prompts in DEFAULT_STAGES are generic across any repo',
+        },
+      ],
+      { title: 'Analyze codebase?' },
+    );
+    if (picked === 'skip' || picked === undefined) {
+      return baselineStages;
+    }
+    if (picked === 'reuse') {
+      profile = existing;
+    }
+    // picked === 'reanalyze' → fall through to the run
+  } else {
+    const shouldAnalyze = await confirm(
+      `Analyze this codebase with ${codingAgent} to tailor prompts and skills?`,
+      true,
+    );
+    if (!shouldAnalyze) {
+      return baselineStages;
+    }
+  }
+
+  if (!profile) {
+    console.log(
+      chalk.dim(`    Spinning up ${codingAgent} to survey the codebase (~30-120s)…`),
+    );
+    const result = await runCodebaseProfiler({
+      cwd,
+      codingAgent,
+      codingAgentModel,
+    });
+    if (!result.profile) {
+      console.log(
+        chalk.yellow(`  Profile generation failed: ${result.error ?? 'unknown error'}`),
+      );
+      console.log(chalk.dim('  Falling back to generic stage prompts.'));
+      return baselineStages;
+    }
+    profile = result.profile;
+    try {
+      saveProjectProfile(cwd, profile);
+      console.log(chalk.green(`  Profile saved → ${getProjectProfilePath(cwd)}`));
+    } catch (err) {
+      console.log(
+        chalk.yellow(
+          `  Could not persist profile: ${err instanceof Error ? err.message : String(err)}`,
+        ),
+      );
+    }
+  }
+
+  // Print a short summary of the profile so the user knows what the agent will use.
+  console.log(chalk.dim(`    language:   ${profile.primaryLanguage}`));
+  if (profile.framework) console.log(chalk.dim(`    framework:  ${profile.framework}`));
+  if (profile.testCommand) console.log(chalk.dim(`    test:       ${profile.testCommand}`));
+  if (profile.lintCommand) console.log(chalk.dim(`    lint:       ${profile.lintCommand}`));
+  if (profile.buildCommand) console.log(chalk.dim(`    build:      ${profile.buildCommand}`));
+
+  // Install bundled skills into the agent-specific skills directory.
+  const skillsDir = resolveAgentSkillsDir(cwd, codingAgent);
+  console.log(chalk.dim(`    Installing bundled skills → ${skillsDir}`));
+  const bundled = installBundledSkills(cwd, codingAgent);
+  if (bundled.error) {
+    console.log(chalk.yellow(`      warning: ${bundled.error}`));
+  }
+  if (bundled.installed.length > 0) {
+    console.log(chalk.green(`      installed: ${bundled.installed.join(', ')}`));
+  }
+  if (bundled.skipped.length > 0) {
+    console.log(chalk.dim(`      skipped (already present): ${bundled.skipped.join(', ')}`));
+  }
+
+  // Generate project-specific skills off the profile.
+  console.log(chalk.dim(`    Generating project skills with ${codingAgent}…`));
+  const projSkills = await generateProjectSkills({
+    cwd,
+    codingAgent,
+    codingAgentModel,
+    profile,
+  });
+  if (projSkills.error) {
+    console.log(chalk.yellow(`      warning: ${projSkills.error}`));
+  }
+  if (projSkills.generated.length > 0) {
+    console.log(chalk.green(`      generated: ${projSkills.generated.join(', ')}`));
+  }
+  if (projSkills.missing.length > 0) {
+    console.log(chalk.dim(`      missing: ${projSkills.missing.join(', ')}`));
+  }
+
+  // Tailor stage prompts.
+  console.log(chalk.dim(`    Generating stage prompts with ${codingAgent}…`));
+  const specs: StagePromptSpec[] = baselineStages.map((s) => ({
+    id: s.id,
+    kind: s.kind === 'review-loop' ? 'review-loop' : 'normal',
+  }));
+  const stageResult = await generateStagePrompts({
+    cwd,
+    codingAgent,
+    codingAgentModel,
+    profile,
+    specs,
+  });
+  if (stageResult.error) {
+    console.log(chalk.yellow(`      warning: ${stageResult.error}`));
+    console.log(chalk.dim('      keeping generic prompts where tailored ones are missing.'));
+  }
+  const tailoredIds = Object.keys(stageResult.prompts);
+  if (tailoredIds.length > 0) {
+    console.log(chalk.green(`      tailored: ${tailoredIds.join(', ')}`));
+  }
+
+  return applyGeneratedPrompts(baselineStages, stageResult.prompts);
+}
+
+/**
  * Create (or edit) flow. When `current` is passed, its values are used as
  * defaults so the user can keep fields unchanged by accepting the default.
  */
@@ -1250,7 +1416,7 @@ async function createFlow(
   console.log();
 
   // Step 2: polling interval.
-  console.log(chalk.bold('  Step 2/4: polling interval'));
+  console.log(chalk.bold('  Step 2/5: polling interval'));
   const interval = await pickInterval(current?.pollIntervalMinutes);
   if (!interval) {
     console.log(chalk.dim('  Cancelled.'));
@@ -1260,7 +1426,7 @@ async function createFlow(
   console.log();
 
   // Step 3: filter.
-  console.log(chalk.bold('  Step 3/4: issue filter (optional)'));
+  console.log(chalk.bold('  Step 3/5: issue filter (optional)'));
   const filter = await pickFilter(detectedRepo, current?.filter);
   if (!filter) {
     console.log(chalk.dim('  Cancelled.'));
@@ -1269,12 +1435,33 @@ async function createFlow(
   }
   console.log();
 
-  // Step 4: workflow stages.
-  console.log(chalk.bold('  Step 4/4: workflow stages'));
+  // Step 4: analyze the codebase and tailor prompts + skills.
+  console.log(chalk.bold('  Step 4/5: analyze codebase'));
+  console.log(
+    chalk.dim(
+      '    Ask the coding agent to survey this repo, generate tailored stage prompts,',
+    ),
+  );
+  console.log(
+    chalk.dim(
+      '    and install skills. You can skip this and use the generic defaults instead.',
+    ),
+  );
+  const baselineStages = current?.stages ?? DEFAULT_STAGES;
+  const tailoredStages = await runAnalysisStep(
+    opts.cwd,
+    codingAgent,
+    codingAgentModel,
+    baselineStages,
+  );
+  console.log();
+
+  // Step 5: workflow stages.
+  console.log(chalk.bold('  Step 5/5: workflow stages'));
   console.log(
     chalk.dim('    Each stage has its own prompt and mode. Accept defaults or customize.'),
   );
-  const stages = await runStagesStep(opts.cwd, current?.stages);
+  const stages = await runStagesStep(opts.cwd, tailoredStages);
   if (!stages) {
     console.log(chalk.dim('  Cancelled.'));
     console.log();

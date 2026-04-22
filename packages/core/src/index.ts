@@ -76,6 +76,52 @@ export {
 } from './workflow-generator.js';
 
 export {
+  runCodingAgent,
+  type RunCodingAgentOptions,
+  type RunCodingAgentResult,
+} from './analysis/run-coding-agent.js';
+
+export {
+  PROJECT_PROFILE_FILE,
+  coerceProjectProfile,
+  getProjectProfilePath,
+  isProjectProfile,
+  loadProjectProfile,
+  saveProjectProfile,
+  type ProjectProfile,
+} from './analysis/profile.js';
+
+export {
+  buildProfilerPrompt,
+  runCodebaseProfiler,
+  type RunCodebaseProfilerOptions,
+  type RunCodebaseProfilerResult,
+} from './analysis/profiler.js';
+
+export {
+  applyGeneratedPrompts,
+  buildStagePromptsPrompt,
+  coerceStagePrompts,
+  generateStagePrompts,
+  type GenerateStagePromptsOptions,
+  type GenerateStagePromptsResult,
+  type GeneratedStagePrompt,
+  type StagePromptSpec,
+} from './analysis/stage-prompts.js';
+
+export {
+  DEFAULT_GENERATED_SKILL_SLUGS,
+  buildSkillsPrompt,
+  generateProjectSkills,
+  hasValidFrontmatter,
+  installBundledSkills,
+  resolveAgentSkillsDir,
+  type GenerateProjectSkillsOptions,
+  type GenerateProjectSkillsResult,
+  type InstallBundledSkillsResult,
+} from './analysis/skills.js';
+
+export {
   GITHUB_CONFIG_FILE,
   GITHUB_POLL_INTERVAL_PRESETS,
   DEFAULT_STAGES,
