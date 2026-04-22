@@ -1,6 +1,7 @@
 import chalk from 'chalk';
 
 import { getPackageInfo } from '../utils/package-info.js';
+import { renderFlowHuntBranding } from './branding.js';
 
 const pkg = getPackageInfo();
 
@@ -32,6 +33,8 @@ export function printBanner(): void {
     }
   });
 
+  console.log();
+  console.log(`  ${renderFlowHuntBranding()}`);
   console.log();
   console.log(`  ${chalk.dim('Type a task to start a new worktree session')}`);
   console.log(

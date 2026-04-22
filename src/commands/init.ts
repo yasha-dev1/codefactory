@@ -4,6 +4,7 @@ import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { logger } from '../ui/logger.js';
+import { printFlowHuntBranding } from '../ui/branding.js';
 import { withSpinner } from '../ui/spinner.js';
 import { confirmPrompt, selectPrompt, multiselectPrompt, inputPrompt } from '../ui/prompts.js';
 import { isGitRepo, getRepoRoot } from '../utils/git.js';
@@ -61,6 +62,9 @@ export async function initCommand(options: InitOptions): Promise<void> {
   }
 
   const repoRoot = await getRepoRoot();
+
+  printFlowHuntBranding();
+  console.log();
 
   logger.header('CodeFactory - Harness Engineering Setup');
   logger.dim(

@@ -9,6 +9,7 @@ import { Readable } from 'node:stream';
 import chalk from 'chalk';
 
 import { logger } from '../ui/logger.js';
+import { printFlowHuntBranding } from '../ui/branding.js';
 import { withSpinner } from '../ui/spinner.js';
 import { ChecksumError, NetworkError, UpdateError } from '../utils/errors.js';
 import { getPackageInfo } from '../utils/package-info.js';
@@ -16,6 +17,9 @@ import { checkForUpdate } from '../utils/version-check.js';
 
 export async function updateCommand(options: { check?: boolean; force?: boolean }): Promise<void> {
   const { version: currentVersion } = getPackageInfo();
+
+  printFlowHuntBranding();
+  console.log();
 
   try {
     const { available, latest } = await checkForUpdate(currentVersion);
