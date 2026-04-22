@@ -9,9 +9,12 @@ import {
   DEFAULT_STAGES,
   NEEDS_JUDGMENT_LABEL,
   buildHarnextLabelSpecs,
+  getStageRunner,
   loadGithubConnection,
   saveGithubConnection,
   type GithubConnectionConfig,
+  type NormalStage,
+  type ReviewLoopStage,
 } from '../src/github-connection.js';
 
 describe('buildHarnextLabelSpecs', () => {
@@ -111,5 +114,98 @@ describe('GithubConnectionConfig save/load round-trip', () => {
     expect(loaded).not.toBeNull();
     expect(loaded!.codingAgent).toBe('harnext');
     expect(loaded!.codingAgentModel).toBeUndefined();
+  });
+
+  it('treats stages without a runner field as local (back-compat)', () => {
+    const cfg = baseConfig();
+    saveGithubConnection(projectCwd, cfg);
+    const loaded = loadGithubConnection(projectCwd);
+    expect(loaded).not.toBeNull();
+    for (const stage of loaded!.stages) {
+      expect(stage.runner).toBeUndefined();
+      expect(getStageRunner(stage)).toEqual({ kind: 'local' });
+    }
+  });
+
+  it('round-trips a valid github-actions runner on a normal stage', () => {
+    const stage: NormalStage = {
+      ...(DEFAULT_STAGES[0] as NormalStage),
+      runner: {
+        kind: 'github-actions',
+        workflowPath: '.github/workflows/harnext-triage.yml',
+        origin: 'generated',
+      },
+    };
+    const cfg = baseConfig({ stages: [stage, ...DEFAULT_STAGES.slice(1)] });
+    saveGithubConnection(projectCwd, cfg);
+    const loaded = loadGithubConnection(projectCwd);
+    expect(loaded).not.toBeNull();
+    expect(loaded!.stages[0].runner).toEqual({
+      kind: 'github-actions',
+      workflowPath: '.github/workflows/harnext-triage.yml',
+      origin: 'generated',
+    });
+    expect(getStageRunner(loaded!.stages[0]).kind).toBe('github-actions');
+  });
+
+  it('round-trips a valid github-actions runner on a review-loop stage', () => {
+    const loopStage = DEFAULT_STAGES.find((s) => s.kind === 'review-loop') as ReviewLoopStage;
+    const stage: ReviewLoopStage = {
+      ...loopStage,
+      runner: {
+        kind: 'github-actions',
+        workflowPath: '.github/workflows/harnext-review.yaml',
+        origin: 'connected',
+      },
+    };
+    const stages = DEFAULT_STAGES.map((s) => (s.kind === 'review-loop' ? stage : s));
+    const cfg = baseConfig({ stages });
+    saveGithubConnection(projectCwd, cfg);
+    const loaded = loadGithubConnection(projectCwd);
+    expect(loaded).not.toBeNull();
+    const reloaded = loaded!.stages.find((s) => s.kind === 'review-loop');
+    expect(reloaded?.runner).toEqual({
+      kind: 'github-actions',
+      workflowPath: '.github/workflows/harnext-review.yaml',
+      origin: 'connected',
+    });
+  });
+
+  it('rejects stages with an invalid runner shape (falls back to DEFAULT_STAGES)', () => {
+    // A runner missing workflowPath is not a valid github-actions runner.
+    // The loader treats the whole stages array as invalid and falls back to
+    // DEFAULT_STAGES rather than silently resolving the bad runner to local.
+    const bogus = {
+      ...baseConfig(),
+      stages: [
+        {
+          ...(DEFAULT_STAGES[0] as NormalStage),
+          runner: { kind: 'github-actions', origin: 'generated' },
+        },
+      ],
+    };
+    saveGithubConnection(projectCwd, bogus as GithubConnectionConfig);
+    const loaded = loadGithubConnection(projectCwd);
+    expect(loaded).not.toBeNull();
+    expect(loaded!.stages).toEqual(DEFAULT_STAGES);
+  });
+
+  it('rejects stages with a bad runner origin', () => {
+    const bogus = {
+      ...baseConfig(),
+      stages: [
+        {
+          ...(DEFAULT_STAGES[0] as NormalStage),
+          runner: {
+            kind: 'github-actions',
+            workflowPath: '.github/workflows/x.yml',
+            origin: 'handwritten',
+          },
+        },
+      ],
+    };
+    saveGithubConnection(projectCwd, bogus as GithubConnectionConfig);
+    const loaded = loadGithubConnection(projectCwd);
+    expect(loaded!.stages).toEqual(DEFAULT_STAGES);
   });
 });

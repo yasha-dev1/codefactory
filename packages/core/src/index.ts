@@ -63,12 +63,26 @@ export {
 } from './coding-agent-runner.js';
 
 export {
+  WORKFLOW_PROMPT_BUNDLES,
+  toStageWorkflowStage,
+  type StageWorkflowInput,
+  type WorkflowPromptBundle,
+} from './workflow-prompts.js';
+
+export {
+  generateStageWorkflow,
+  type GenerateStageWorkflowInput,
+  type GenerateStageWorkflowResult,
+} from './workflow-generator.js';
+
+export {
   GITHUB_CONFIG_FILE,
   GITHUB_POLL_INTERVAL_PRESETS,
   DEFAULT_STAGES,
   AWAITING_APPROVAL_LABEL,
   NEEDS_JUDGMENT_LABEL,
   getGithubConfigPath,
+  getStageRunner,
   loadGithubConnection,
   saveGithubConnection,
   deleteGithubConnection,
@@ -84,11 +98,15 @@ export {
   type GithubConnectionConfig,
   type GithubPollIntervalMinutes,
   type GithubIssueFilter,
+  type GithubActionsRunner,
+  type LocalRunner,
   type NormalStage,
   type ReviewLoopStage,
   type StageDefinition,
   type StageEntry,
   type StageMode,
+  type StageRunner,
+  type StageRunnerKind,
   type GhResult,
   type GhCommandOk,
   type GhCommandError,

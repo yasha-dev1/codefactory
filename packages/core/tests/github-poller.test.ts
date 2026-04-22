@@ -1491,3 +1491,164 @@ describe('detectOpenedPr', () => {
     expect(result).toEqual({ number: 57, via: 'issue-timeline' });
   });
 });
+
+describe('runPollTick — github-actions runner', () => {
+  const ghaRunner = {
+    kind: 'github-actions' as const,
+    workflowPath: '.github/workflows/harnext-triage.yml',
+    origin: 'generated' as const,
+  };
+
+  it('skips a normal stage marked github-actions: no agent run, no transition', async () => {
+    const stages: StageDefinition[] = [
+      {
+        id: 'triage',
+        label: 'harnext:triage',
+        prompt: 'triage',
+        mode: 'yolo',
+        runner: ghaRunner,
+      },
+      { id: 'plan', label: 'harnext:plan', prompt: 'plan', mode: 'human-approval' },
+    ];
+    const item = makeItem({
+      number: 7,
+      labels: [{ name: 'harnext:triage' }],
+      updated_at: '2026-04-19T12:30:00Z',
+    });
+    const cfg = baseConfig({ stages, lastSeenUpdatedAt: '2026-04-19T10:00:00Z' });
+    const io = makeIo({ items: [item], agentResults: [] });
+
+    const result = await runPollTick(cfg, io);
+
+    expect(io.prompts).toHaveLength(0);
+    expect(io.transitions).toHaveLength(0);
+    // GHA skip does not count as "processed" — the workflow owns the run.
+    expect(result.processed).toBe(0);
+    const skip = io.ticks.find((t) => /skipped/i.test(t.output ?? ''));
+    expect(skip).toBeDefined();
+    expect(skip!.stageId).toBe('triage');
+    expect(skip!.stageLabel).toBe('harnext:triage');
+    expect(result.newPointer).toBe(item.updated_at);
+  });
+
+  it('breaks the YOLO chain at a github-actions boundary (local → gha)', async () => {
+    const stages: StageDefinition[] = [
+      { id: 'triage', label: 'harnext:triage', prompt: 'triage', mode: 'yolo' },
+      {
+        id: 'plan',
+        label: 'harnext:plan',
+        prompt: 'plan',
+        mode: 'yolo',
+        runner: {
+          ...ghaRunner,
+          workflowPath: '.github/workflows/harnext-plan.yml',
+        },
+      },
+      { id: 'implement', label: 'harnext:implement', prompt: 'implement', mode: 'yolo' },
+    ];
+    const initial = makeItem({
+      number: 8,
+      labels: [{ name: 'harnext:triage' }],
+      updated_at: '2026-04-19T12:30:00Z',
+    });
+    const afterTriage = makeItem({
+      number: 8,
+      labels: [{ name: 'harnext:plan' }],
+      updated_at: '2026-04-19T12:31:00Z',
+    });
+    const cfg = baseConfig({ stages, lastSeenUpdatedAt: '2026-04-19T10:00:00Z' });
+    const io = makeIo({
+      items: [initial],
+      refetchResults: [afterTriage],
+      agentResults: [{ exit: 0, durationMs: 10, output: 'triage-done' }],
+    });
+
+    await runPollTick(cfg, io);
+
+    expect(io.prompts).toHaveLength(1); // only triage ran
+    // Exactly one transition — triage → plan (the local → gha handoff).
+    expect(io.transitions).toEqual([
+      { itemNumber: 8, remove: 'harnext:triage', add: 'harnext:plan' },
+    ]);
+    const skip = io.ticks.find(
+      (t) => t.stageId === 'plan' && /skipped/i.test(t.output ?? ''),
+    );
+    expect(skip).toBeDefined();
+  });
+
+  it('skips a review-loop stage marked github-actions: no agent run, no verdict query', async () => {
+    const stages: StageDefinition[] = [
+      {
+        id: 'review',
+        label: 'harnext:review',
+        kind: 'review-loop' as const,
+        maxIterations: 3,
+        review: { prompt: 'review' },
+        fix: { prompt: 'fix' },
+        onExit: 'human-approval',
+        runner: {
+          ...ghaRunner,
+          workflowPath: '.github/workflows/harnext-review.yml',
+        },
+      } as unknown as StageDefinition,
+    ];
+    const pr = makeItem({
+      number: 9,
+      labels: [{ name: 'harnext:review' }],
+      pull_request: { html_url: 'https://example/pr' },
+    });
+    const cfg = baseConfig({ stages, lastSeenUpdatedAt: '2026-04-19T10:00:00Z' });
+    const io = makeIo({ items: [pr], agentResults: [] });
+
+    await runPollTick(cfg, io);
+
+    expect(io.prompts).toHaveLength(0);
+    expect(io.verdictQueries).toHaveLength(0);
+    expect(io.transitions).toHaveLength(0);
+    const skip = io.ticks.find(
+      (t) => t.stageId === 'review' && /skipped/i.test(t.output ?? ''),
+    );
+    expect(skip).toBeDefined();
+  });
+
+  it('auto-entry: adds the first stage label even when runner is gha, then skips', async () => {
+    const stages: StageDefinition[] = [
+      {
+        id: 'triage',
+        label: 'harnext:triage',
+        prompt: 'triage',
+        mode: 'human-approval',
+        runner: ghaRunner,
+      },
+    ];
+    const item = makeItem({
+      number: 10,
+      labels: [{ name: 'bug' }],
+      updated_at: '2026-04-19T12:30:00Z',
+    });
+    const afterLabel = makeItem({
+      number: 10,
+      labels: [{ name: 'bug' }, { name: 'harnext:triage' }],
+      updated_at: '2026-04-19T12:30:00Z',
+    });
+    const cfg = baseConfig({ stages, lastSeenUpdatedAt: '2026-04-19T10:00:00Z' });
+    const io = makeIo({
+      items: [item],
+      refetchResults: [afterLabel],
+      agentResults: [],
+    });
+
+    await runPollTick(cfg, io);
+
+    // Auto-entry still adds the first stage label…
+    expect(io.transitions).toEqual([
+      { itemNumber: 10, remove: '', add: 'harnext:triage' },
+    ]);
+    // …but the chain breaks before running the agent.
+    expect(io.prompts).toHaveLength(0);
+    const skip = io.ticks.find(
+      (t) => t.stageId === 'triage' && /skipped/i.test(t.output ?? ''),
+    );
+    expect(skip).toBeDefined();
+  });
+});

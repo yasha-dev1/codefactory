@@ -19,6 +19,7 @@ import {
   AWAITING_APPROVAL_LABEL,
   GITHUB_CONFIG_FILE,
   NEEDS_JUDGMENT_LABEL,
+  getStageRunner,
   runGh,
   type GhResult,
   type GithubConnectionConfig,
@@ -1040,6 +1041,22 @@ export async function runPollTick(
         const kind: 'issue' | 'pr' = isPullRequest(item) ? 'pr' : 'issue';
 
         if (currentEntry.kind === 'review-loop') {
+          if (getStageRunner(currentEntry).kind === 'github-actions') {
+            // GHA owns the entire loop — agent invocation, label transition,
+            // and needs-judgment on failure. The poller just logs and breaks.
+            io.appendTick({
+              ts: now().toISOString(),
+              itemNumber: item.number,
+              itemKind: kind,
+              stageId: currentEntry.id,
+              stageLabel: currentEntry.label,
+              mode: currentEntry.onExit,
+              exit: 0,
+              durationMs: 0,
+              output: '(skipped — runner: github-actions; workflow owns transition)',
+            });
+            break;
+          }
           const outcome = await runReviewLoop({
             item,
             itemKind: kind,
@@ -1062,6 +1079,25 @@ export async function runPollTick(
 
         // Normal single-run stage (currentEntry.kind is 'normal' | undefined).
         const currentStage = currentEntry as NormalStage;
+
+        if (getStageRunner(currentStage).kind === 'github-actions') {
+          // GHA owns invocation AND the label transition — the poller does
+          // not run the agent and does not move the label. The workflow
+          // file, fired by the stage label, handles everything from here.
+          io.appendTick({
+            ts: now().toISOString(),
+            itemNumber: item.number,
+            itemKind: kind,
+            stageId: currentStage.id,
+            stageLabel: currentStage.label,
+            mode: currentStage.mode,
+            exit: 0,
+            durationMs: 0,
+            output: '(skipped — runner: github-actions; workflow owns transition)',
+          });
+          break;
+        }
+
         const prompt = buildStagePrompt(currentStage, item);
         const startedAt = now();
         const result = await io.runAgent(prompt, { cwd: workRecord?.path });

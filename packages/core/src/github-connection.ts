@@ -38,6 +38,35 @@ export type GithubIssueFilter =
 export type StageMode = 'yolo' | 'human-approval';
 
 /**
+ * Where a stage executes. `local` runs through the cron-driven poller on the
+ * user's machine; `github-actions` hands the stage off to a generated (or
+ * user-connected) workflow file that owns the entire lifecycle — agent
+ * invocation, label transition, PR handoff, needs-judgment on failure. The
+ * poller skips GHA-marked stages entirely so there is exactly one writer per
+ * label boundary.
+ */
+export type StageRunnerKind = 'local' | 'github-actions';
+
+export interface LocalRunner {
+  kind: 'local';
+}
+
+export interface GithubActionsRunner {
+  kind: 'github-actions';
+  /** Repo-relative path, e.g. '.github/workflows/harnext-triage.yml'. */
+  workflowPath: string;
+  /**
+   * Provenance: `connected` = user pointed at an existing workflow;
+   * `generated` = harnext's setup wizard asked the coding agent to write it.
+   * Surfaces in the wizard's "regenerate" UI so users can see what harnext
+   * authored vs. what they wrote themselves.
+   */
+  origin: 'connected' | 'generated';
+}
+
+export type StageRunner = LocalRunner | GithubActionsRunner;
+
+/**
  * A plain single-run stage — the traditional shape. `kind` is optional so
  * configs written before the union existed (no `kind` field) round-trip as
  * normal stages without any migration step.
@@ -52,6 +81,12 @@ export interface NormalStage {
   prompt: string;
   /** How to advance the workflow once the agent finishes. */
   mode: StageMode;
+  /**
+   * Where this stage runs. Absent = local (back-compat for every
+   * github.json written before runner existed). Use `getStageRunner` to
+   * read this safely.
+   */
+  runner?: StageRunner;
 }
 
 /**
@@ -79,6 +114,21 @@ export interface ReviewLoopStage {
    * entry, human-approval parks on `awaiting-approval`.
    */
   onExit: StageMode;
+  /**
+   * Where the review↔fix loop runs. Absent = local. When `github-actions`,
+   * the entire loop executes inside a single Actions run; see workflow
+   * generator docs for the maxIterations caveat.
+   */
+  runner?: StageRunner;
+}
+
+/**
+ * Resolve a stage's runner, defaulting to local when the field is absent so
+ * existing configs (and stage definitions that omit `runner`) keep working
+ * without migration.
+ */
+export function getStageRunner(stage: StageEntry): StageRunner {
+  return stage.runner ?? { kind: 'local' };
 }
 
 export type StageEntry = NormalStage | ReviewLoopStage;
@@ -238,12 +288,34 @@ export function getGithubConfigPath(cwd: string): string {
   return join(getProjectStateDir(cwd), GITHUB_CONFIG_FILE);
 }
 
+/**
+ * Validate a raw `runner` sub-object. Absent is allowed (caller treats it as
+ * local). A present value must be one of the two discriminated shapes with
+ * the right field types — anything else is rejected so a typo doesn't
+ * silently resolve to local and mask the error.
+ */
+function isValidStageRunner(x: unknown): boolean {
+  if (x === undefined) return true;
+  if (!x || typeof x !== 'object') return false;
+  const r = x as Record<string, unknown>;
+  if (r.kind === 'local') return true;
+  if (r.kind === 'github-actions') {
+    return (
+      typeof r.workflowPath === 'string' &&
+      r.workflowPath.length > 0 &&
+      (r.origin === 'connected' || r.origin === 'generated')
+    );
+  }
+  return false;
+}
+
 function isValidNormalStageShape(x: Record<string, unknown>): boolean {
   return (
     typeof x.id === 'string' &&
     typeof x.label === 'string' &&
     typeof x.prompt === 'string' &&
-    (x.mode === 'yolo' || x.mode === 'human-approval')
+    (x.mode === 'yolo' || x.mode === 'human-approval') &&
+    isValidStageRunner(x.runner)
   );
 }
 
@@ -259,7 +331,8 @@ function isValidReviewLoopStageShape(x: Record<string, unknown>): boolean {
     !!review &&
     typeof review.prompt === 'string' &&
     !!fix &&
-    typeof fix.prompt === 'string'
+    typeof fix.prompt === 'string' &&
+    isValidStageRunner(x.runner)
   );
 }
 

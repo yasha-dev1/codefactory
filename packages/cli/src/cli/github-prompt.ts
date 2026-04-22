@@ -1,19 +1,25 @@
+import { existsSync, readdirSync, unlinkSync } from 'node:fs';
+import { basename, join } from 'node:path';
 import { createInterface } from 'node:readline';
 
 import chalk from 'chalk';
 import {
+  AWAITING_APPROVAL_LABEL,
   DEFAULT_STAGES,
   GITHUB_POLL_INTERVAL_PRESETS,
+  NEEDS_JUDGMENT_LABEL,
   buildCronSchedule,
   buildGithubPollCronLine,
   buildHarnextLabelSpecs,
   deleteGithubConnection,
   ensureRepoLabels,
   findCronLine,
+  generateStageWorkflow,
   getCodingAgentSpec,
   getGithubConfigPath,
   getGithubPollCronTag,
   getRepoFromCwd,
+  getStageRunner,
   installCronLine,
   listCodingAgents,
   listRepoAssignableUsers,
@@ -25,6 +31,7 @@ import {
   verifyGhAuth,
   type CodingAgentId,
   type GhResult,
+  type GithubActionsRunner,
   type GithubConnectionConfig,
   type GithubIssueFilter,
   type GithubPollIntervalMinutes,
@@ -32,6 +39,7 @@ import {
   type ReviewLoopStage,
   type StageEntry,
   type StageMode,
+  type StageRunner,
 } from '@harnext/core';
 
 import { editPrompt } from './external-editor.js';
@@ -91,14 +99,25 @@ function describeEntryMode(s: StageEntry): string {
   return formatMode(s.mode);
 }
 
+function describeRunner(s: StageEntry): string {
+  const r = getStageRunner(s);
+  if (r.kind === 'local') return 'local';
+  return `gha:${basename(r.workflowPath)}`;
+}
+
 function renderStagesTable(stages: StageEntry[]): void {
-  console.log(chalk.dim('  #  type  id            label                          behaviour'));
+  console.log(
+    chalk.dim('  #  type  id            label                          runner              behaviour'),
+  );
   stages.forEach((s, i) => {
     const idx = String(i + 1).padEnd(2);
     const kind = describeEntryKind(s).padEnd(5);
     const id = s.id.padEnd(12);
     const label = s.label.padEnd(30);
     const kindColored = s.kind === 'review-loop' ? chalk.magenta(kind) : chalk.blue(kind);
+    const r = getStageRunner(s);
+    const runnerRaw = describeRunner(s).padEnd(19);
+    const runnerColored = r.kind === 'local' ? chalk.dim(runnerRaw) : chalk.yellow(runnerRaw);
     console.log(
       chalk.dim(`  ${idx} `) +
         kindColored +
@@ -106,6 +125,8 @@ function renderStagesTable(stages: StageEntry[]): void {
         chalk.cyan(id) +
         ' ' +
         label +
+        ' ' +
+        runnerColored +
         ' ' +
         describeEntryMode(s),
     );
@@ -122,14 +143,16 @@ function validateStageLabel(label: string, stages: StageEntry[], self?: number):
 
 function cloneStages(stages: StageEntry[]): StageEntry[] {
   return stages.map((s) => {
+    const runner = s.runner ? { ...s.runner } : undefined;
     if (s.kind === 'review-loop') {
       return {
         ...s,
         review: { ...s.review },
         fix: { ...s.fix },
+        runner,
       };
     }
-    return { ...s };
+    return { ...s, runner };
   });
 }
 
@@ -179,15 +202,83 @@ async function pickIterations(current?: number): Promise<number | undefined> {
  * groups each get their own editor. Mutates `stages` in place. Returns true
  * if anything was changed.
  */
-async function editStage(stages: StageEntry[], index: number): Promise<boolean> {
+async function editStage(
+  stages: StageEntry[],
+  index: number,
+  cwd: string,
+): Promise<boolean> {
   const entry = stages[index];
   if (entry.kind === 'review-loop') {
-    return editReviewLoopStage(stages, index);
+    return editReviewLoopStage(stages, index, cwd);
   }
-  return editNormalStage(stages, index);
+  return editNormalStage(stages, index, cwd);
 }
 
-async function editNormalStage(stages: StageEntry[], index: number): Promise<boolean> {
+/**
+ * Simple runner toggle used inside the stage editors. Switches between
+ * `local` and `github-actions`; for GHA the user picks (or types) a
+ * workflow file path. Deeper "generate via agent" lives in `runRunnersStep`.
+ */
+async function editStageRunner(stage: StageEntry, cwd: string): Promise<boolean> {
+  const current = getStageRunner(stage);
+  type Choice = { kind: 'local' } | { kind: 'gha' };
+  const items: SelectItem<Choice>[] = [
+    {
+      label: 'Local',
+      value: { kind: 'local' },
+      hint: current.kind === 'local' ? 'current — poller runs this stage' : 'poller runs this stage',
+    },
+    {
+      label: 'GitHub Actions',
+      value: { kind: 'gha' },
+      hint:
+        current.kind === 'github-actions'
+          ? `current — ${current.workflowPath}`
+          : 'workflow file owns agent invocation + label transition',
+    },
+  ];
+  const picked = await select(items, { title: 'Where should this stage run?' });
+  if (!picked) return false;
+  if (picked.kind === 'local') {
+    if (current.kind === 'local') return false;
+    delete (stage as { runner?: StageRunner }).runner;
+    return true;
+  }
+  const existing = listExistingWorkflows(cwd);
+  let workflowPath =
+    current.kind === 'github-actions' ? current.workflowPath : defaultWorkflowPath(stage.id);
+  if (existing.length > 0) {
+    const pathItems: SelectItem<string>[] = existing.map((p) => ({ label: p, value: p }));
+    pathItems.push({ label: 'Enter a path manually…', value: '__manual__' });
+    const sel = await select(pathItems, { title: 'Which workflow file handles this stage?' });
+    if (!sel) return false;
+    if (sel !== '__manual__') workflowPath = sel;
+  }
+  if (!existing.includes(workflowPath)) {
+    const answer = (
+      await readLine(chalk.cyan(`  workflow path [${workflowPath}]: `))
+    ).trim() || workflowPath;
+    if (!isValidWorkflowPath(answer)) {
+      console.log(chalk.red('  must start with .github/workflows/ and end with .yml or .yaml'));
+      return false;
+    }
+    workflowPath = answer;
+  }
+  const prevOrigin =
+    current.kind === 'github-actions' ? current.origin : 'connected';
+  (stage as { runner?: StageRunner }).runner = {
+    kind: 'github-actions',
+    workflowPath,
+    origin: prevOrigin,
+  } satisfies GithubActionsRunner;
+  return true;
+}
+
+async function editNormalStage(
+  stages: StageEntry[],
+  index: number,
+  cwd: string,
+): Promise<boolean> {
   const stage = stages[index] as NormalStage;
   let changed = false;
 
@@ -197,6 +288,7 @@ async function editNormalStage(stages: StageEntry[], index: number): Promise<boo
     console.log(chalk.dim(`    type:   normal`));
     console.log(chalk.dim(`    label:  ${stage.label}`));
     console.log(chalk.dim(`    mode:   ${formatMode(stage.mode)}`));
+    console.log(chalk.dim(`    runner: ${describeRunner(stage)}`));
     console.log(chalk.dim(`    prompt: ${stage.prompt.split('\n')[0].slice(0, 80)}…`));
 
     type Action =
@@ -204,12 +296,18 @@ async function editNormalStage(stages: StageEntry[], index: number): Promise<boo
       | { kind: 'prompt' }
       | { kind: 'mode' }
       | { kind: 'id' }
+      | { kind: 'runner' }
       | { kind: 'done' };
     const items: SelectItem<Action>[] = [
       { label: 'Edit label', value: { kind: 'label' } },
       { label: 'Edit prompt', value: { kind: 'prompt' } },
       { label: 'Edit mode', value: { kind: 'mode' } },
       { label: 'Edit id', value: { kind: 'id' }, hint: 'internal identifier — used in logs' },
+      {
+        label: 'Edit runner',
+        value: { kind: 'runner' },
+        hint: 'local (poller runs it) or github-actions (workflow runs it)',
+      },
       { label: 'Done', value: { kind: 'done' } },
     ];
     const action = await select(items, { title: 'What do you want to change?' });
@@ -248,11 +346,17 @@ async function editNormalStage(stages: StageEntry[], index: number): Promise<boo
       }
       stage.id = answer;
       changed = true;
+    } else if (action.kind === 'runner') {
+      if (await editStageRunner(stage, cwd)) changed = true;
     }
   }
 }
 
-async function editReviewLoopStage(stages: StageEntry[], index: number): Promise<boolean> {
+async function editReviewLoopStage(
+  stages: StageEntry[],
+  index: number,
+  cwd: string,
+): Promise<boolean> {
   const group = stages[index] as ReviewLoopStage;
   let changed = false;
 
@@ -263,6 +367,7 @@ async function editReviewLoopStage(stages: StageEntry[], index: number): Promise
     console.log(chalk.dim(`    label:      ${group.label}`));
     console.log(chalk.dim(`    iterations: ${group.maxIterations}`));
     console.log(chalk.dim(`    onExit:     ${formatMode(group.onExit)}`));
+    console.log(chalk.dim(`    runner:     ${describeRunner(group)}`));
     console.log(chalk.dim(`    review:     ${group.review.prompt.split('\n')[0].slice(0, 70)}…`));
     console.log(chalk.dim(`    fix:        ${group.fix.prompt.split('\n')[0].slice(0, 70)}…`));
 
@@ -273,6 +378,7 @@ async function editReviewLoopStage(stages: StageEntry[], index: number): Promise
       | { kind: 'review' }
       | { kind: 'fix' }
       | { kind: 'onExit' }
+      | { kind: 'runner' }
       | { kind: 'done' };
     const items: SelectItem<Action>[] = [
       { label: 'Edit label', value: { kind: 'label' } },
@@ -288,6 +394,11 @@ async function editReviewLoopStage(stages: StageEntry[], index: number): Promise
         label: 'Edit onExit mode',
         value: { kind: 'onExit' },
         hint: 'what happens after the loop terminates (approved/commented)',
+      },
+      {
+        label: 'Edit runner',
+        value: { kind: 'runner' },
+        hint: 'local (poller runs the loop) or github-actions (workflow runs it)',
       },
       { label: 'Done', value: { kind: 'done' } },
     ];
@@ -344,11 +455,16 @@ async function editReviewLoopStage(stages: StageEntry[], index: number): Promise
         group.onExit = mode;
         changed = true;
       }
+    } else if (action.kind === 'runner') {
+      if (await editStageRunner(group, cwd)) changed = true;
     }
   }
 }
 
-async function runStagesStep(current?: StageEntry[]): Promise<StageEntry[] | undefined> {
+async function runStagesStep(
+  cwd: string,
+  current?: StageEntry[],
+): Promise<StageEntry[] | undefined> {
   const stages = cloneStages(current ?? DEFAULT_STAGES);
 
   for (;;) {
@@ -404,7 +520,7 @@ async function runStagesStep(current?: StageEntry[]): Promise<StageEntry[] | und
     }
 
     if (action.kind === 'edit') {
-      await editStage(stages, action.index);
+      await editStage(stages, action.index, cwd);
     } else if (action.kind === 'add-normal') {
       const added = await addStage(stages, 'normal');
       if (added) stages.push(added);
@@ -496,6 +612,236 @@ async function addStage(
     onExit,
   };
   return group;
+}
+
+/** Relative workflow path we suggest when generating a file for a stage. */
+function defaultWorkflowPath(stageId: string): string {
+  return `.github/workflows/harnext-${stageId}.yml`;
+}
+
+function isValidWorkflowPath(p: string): boolean {
+  return (
+    p.startsWith('.github/workflows/') &&
+    (p.endsWith('.yml') || p.endsWith('.yaml')) &&
+    !p.includes('..')
+  );
+}
+
+/** List existing workflow files under `.github/workflows/` relative to cwd. */
+function listExistingWorkflows(cwd: string): string[] {
+  const dir = join(cwd, '.github', 'workflows');
+  if (!existsSync(dir)) return [];
+  try {
+    return readdirSync(dir)
+      .filter((n) => n.endsWith('.yml') || n.endsWith('.yaml'))
+      .map((n) => `.github/workflows/${n}`)
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Per-stage runner picker: run after stages are finalized. For each stage
+ * the user can keep `local` (default), connect an existing workflow file,
+ * or ask the coding agent to generate one. Mutates `stages` in place. The
+ * generator, preview, and keep/discard are all wired up here — the caller
+ * just consumes the updated stage entries.
+ */
+async function runRunnersStep(
+  stages: StageEntry[],
+  cfg: { repo: string; codingAgent: CodingAgentId; codingAgentModel?: string },
+  cwd: string,
+): Promise<void> {
+  console.log();
+  console.log(chalk.bold('  Step: per-stage runner (local vs github-actions)'));
+  console.log(
+    chalk.dim(
+      '    Local stages are run by the cron poller on this machine. Stages marked',
+    ),
+  );
+  console.log(
+    chalk.dim(
+      '    github-actions skip the poller entirely — a workflow file owns the',
+    ),
+  );
+  console.log(chalk.dim('    agent invocation and the label transition.'));
+
+  let wroteAnyFile = false;
+
+  for (let i = 0; i < stages.length; i += 1) {
+    const stage = stages[i];
+    const nextLabel = stages[i + 1]?.label;
+    console.log();
+    console.log(
+      chalk.bold(`  Stage ${i + 1}: `) +
+        chalk.cyan(stage.id) +
+        chalk.dim(` (${stage.label})`),
+    );
+
+    type Choice =
+      | { kind: 'local' }
+      | { kind: 'connect' }
+      | { kind: 'generate' }
+      | { kind: 'skip' };
+    const current = getStageRunner(stage);
+    const items: SelectItem<Choice>[] = [
+      {
+        label: 'Keep local',
+        value: { kind: 'local' },
+        hint: current.kind === 'local' ? 'current — poller runs this stage' : 'poller runs this stage',
+      },
+      {
+        label: 'Connect existing GitHub Actions workflow',
+        value: { kind: 'connect' },
+        hint: 'point at a workflow file you already authored',
+      },
+      {
+        label: 'Generate a new GitHub Actions workflow',
+        value: { kind: 'generate' },
+        hint: `ask ${cfg.codingAgent} to write .github/workflows/harnext-${stage.id}.yml`,
+      },
+      { label: 'Skip (keep as-is)', value: { kind: 'skip' } },
+    ];
+    const choice = await select(items, { title: 'How should this stage run?' });
+    if (!choice || choice.kind === 'skip') continue;
+
+    if (choice.kind === 'local') {
+      delete (stage as { runner?: StageRunner }).runner;
+      continue;
+    }
+
+    if (choice.kind === 'connect') {
+      const existing = listExistingWorkflows(cwd);
+      let workflowPath: string | undefined;
+      if (existing.length > 0) {
+        const pathItems: SelectItem<string>[] = existing.map((p) => ({
+          label: p,
+          value: p,
+        }));
+        pathItems.push({ label: 'Enter a path manually…', value: '__manual__' });
+        const picked = await select(pathItems, {
+          title: 'Which workflow file handles this stage?',
+        });
+        if (!picked) continue;
+        workflowPath = picked === '__manual__' ? undefined : picked;
+      }
+      if (!workflowPath) {
+        const answer = (
+          await readLine(
+            chalk.cyan(`  workflow path [${defaultWorkflowPath(stage.id)}]: `),
+          )
+        ).trim() || defaultWorkflowPath(stage.id);
+        if (!isValidWorkflowPath(answer)) {
+          console.log(
+            chalk.red(
+              '  must start with .github/workflows/ and end with .yml or .yaml',
+            ),
+          );
+          continue;
+        }
+        workflowPath = answer;
+      }
+      (stage as { runner?: StageRunner }).runner = {
+        kind: 'github-actions',
+        workflowPath,
+        origin: 'connected',
+      } satisfies GithubActionsRunner;
+      console.log(chalk.green(`  Connected → ${workflowPath}`));
+      continue;
+    }
+
+    // generate
+    const relPath = defaultWorkflowPath(stage.id);
+    const absTarget = join(cwd, relPath);
+    if (existsSync(absTarget)) {
+      console.log(chalk.yellow(`  ${relPath} already exists.`));
+      if (!(await confirm('Overwrite it with a freshly generated workflow?'))) {
+        continue;
+      }
+    }
+    console.log(
+      chalk.dim(
+        `  Spinning up ${cfg.codingAgent} to write ${relPath} (this may take 1–2 minutes)…`,
+      ),
+    );
+    try {
+      const result = await generateStageWorkflow({
+        cwd,
+        stage,
+        cfg: {
+          repo: cfg.repo,
+          pollIntervalMinutes: 15,
+          filter: { kind: 'none' },
+          stages: [],
+          codingAgent: cfg.codingAgent,
+          codingAgentModel: cfg.codingAgentModel,
+          updatedAt: Date.now(),
+        },
+        relativeWorkflowPath: relPath,
+        nextLabel,
+        awaitingLabel: AWAITING_APPROVAL_LABEL,
+        needsJudgmentLabel: NEEDS_JUDGMENT_LABEL,
+        triggerOn: 'both',
+      });
+      if (!result.wroteFile || !result.workflowContent) {
+        console.log(chalk.red('  Agent did not write the expected workflow file.'));
+        if (result.error) console.log(chalk.dim(`    ${result.error}`));
+        continue;
+      }
+      console.log();
+      console.log(chalk.bold(`  Generated ${relPath}:`));
+      console.log(chalk.dim('  ' + '─'.repeat(70)));
+      for (const line of result.workflowContent.split('\n')) {
+        console.log('  ' + line);
+      }
+      console.log(chalk.dim('  ' + '─'.repeat(70)));
+      console.log();
+      const keep = await confirm('Keep this workflow?', true);
+      if (!keep) {
+        try {
+          unlinkSync(result.workflowPath);
+          console.log(chalk.dim('  Discarded.'));
+        } catch (err) {
+          console.log(
+            chalk.yellow(
+              `  Could not remove ${relPath}: ${err instanceof Error ? err.message : String(err)}`,
+            ),
+          );
+        }
+        continue;
+      }
+      (stage as { runner?: StageRunner }).runner = {
+        kind: 'github-actions',
+        workflowPath: relPath,
+        origin: 'generated',
+      } satisfies GithubActionsRunner;
+      wroteAnyFile = true;
+      console.log(chalk.green(`  Connected → ${relPath}`));
+    } catch (err) {
+      console.log(
+        chalk.red('  Generator failed: ') +
+          (err instanceof Error ? err.message : String(err)),
+      );
+    }
+  }
+
+  const anyGha = stages.some((s) => getStageRunner(s).kind === 'github-actions');
+  if (anyGha) {
+    console.log();
+    console.log(chalk.bold('  Reminder:'));
+    if (wroteAnyFile) {
+      console.log(
+        chalk.dim('    • git add .github/workflows/ && commit && push the generated workflow(s)'),
+      );
+    }
+    console.log(
+      chalk.dim(
+        `    • gh secret set ANTHROPIC_API_KEY / OPENAI_API_KEY (as needed) in ${cfg.repo}`,
+      ),
+    );
+    console.log();
+  }
 }
 
 async function removeStage(stages: StageEntry[]): Promise<number | undefined> {
@@ -672,6 +1018,15 @@ function printConfig(cfg: GithubConnectionConfig): void {
     chalk.dim(`    stages:   `) +
       `${cfg.stages.length} (${cfg.stages.map((s) => s.id).join(' → ')})`,
   );
+  const ghaCount = cfg.stages.filter((s) => getStageRunner(s).kind === 'github-actions').length;
+  if (ghaCount > 0) {
+    console.log(
+      chalk.dim(`    runners:  `) +
+        chalk.yellow(`${ghaCount}`) +
+        chalk.dim(` stage${ghaCount === 1 ? '' : 's'} on github-actions, `) +
+        `${cfg.stages.length - ghaCount} local`,
+    );
+  }
   if (cfg.lastSeenUpdatedAt) {
     console.log(chalk.dim(`    pointer:  `) + cfg.lastSeenUpdatedAt);
   }
@@ -713,12 +1068,22 @@ async function stagesOnlyFlow(
     chalk.dim('    coding agent, model, repo, interval, and filter stay as they are.'),
   );
 
-  const newStages = await runStagesStep(existing.stages);
+  const newStages = await runStagesStep(opts.cwd, existing.stages);
   if (!newStages) {
     console.log(chalk.dim('  Cancelled — stages unchanged.'));
     console.log();
     return;
   }
+
+  await runRunnersStep(
+    newStages,
+    {
+      repo: existing.repo,
+      codingAgent: existing.codingAgent,
+      codingAgentModel: existing.codingAgentModel,
+    },
+    opts.cwd,
+  );
 
   const updated: GithubConnectionConfig = {
     ...existing,
@@ -909,13 +1274,21 @@ async function createFlow(
   console.log(
     chalk.dim('    Each stage has its own prompt and mode. Accept defaults or customize.'),
   );
-  const stages = await runStagesStep(current?.stages);
+  const stages = await runStagesStep(opts.cwd, current?.stages);
   if (!stages) {
     console.log(chalk.dim('  Cancelled.'));
     console.log();
     return;
   }
   console.log();
+
+  // Per-stage runner picker. Lets the user punch individual stages over to
+  // GitHub Actions (connect existing, or generate via the chosen agent).
+  await runRunnersStep(
+    stages,
+    { repo: detectedRepo, codingAgent, codingAgentModel },
+    opts.cwd,
+  );
 
   const cfg: GithubConnectionConfig = {
     repo: detectedRepo,
