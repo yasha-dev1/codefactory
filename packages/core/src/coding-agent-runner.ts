@@ -29,6 +29,17 @@ export interface RunExternalCodingAgentOptions {
   spawner?: ExternalAgentSpawner;
   /** Abort the run from the outside (e.g. tick-wide cancellation). */
   signal?: AbortSignal;
+  /**
+   * Invoked for every complete line the agent emits on stdout/stderr,
+   * *as it happens*. Lets callers stream agent activity back to the user
+   * without waiting for the process to exit. `stream` distinguishes stdout
+   * (usually the primary transcript) from stderr (usually progress /
+   * warnings). Lines have trailing newlines stripped.
+   *
+   * Safe to throw from — errors from the callback are swallowed so a
+   * misbehaving UI never kills the agent run.
+   */
+  onLine?: (line: string, stream: 'stdout' | 'stderr') => void;
 }
 
 /** Minimal subset of ChildProcess we need — lets tests stub cleanly. */
@@ -134,8 +145,60 @@ export async function runExternalCodingAgent(
       }
     }
 
-    child.stdout?.on('data', (chunk: Buffer) => stdoutChunks.push(chunk));
-    child.stderr?.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
+    // Buffered capture drives the returned `output`; the line-splitter is
+    // a separate per-stream cursor that fires `onLine` for each complete
+    // line as it arrives. A partial trailing line is flushed on 'close'.
+    const stdoutLineBuf: string[] = [''];
+    const stderrLineBuf: string[] = [''];
+
+    const emitLines = (
+      buf: { s: string[] },
+      stream: 'stdout' | 'stderr',
+      chunk: string,
+    ) => {
+      if (!opts.onLine) return;
+      const combined = buf.s[0] + chunk;
+      const parts = combined.split('\n');
+      buf.s[0] = parts.pop() ?? '';
+      for (const line of parts) {
+        try {
+          opts.onLine(line, stream);
+        } catch {
+          // never let a UI callback kill the run
+        }
+      }
+    };
+    const stdoutCursor = { s: stdoutLineBuf };
+    const stderrCursor = { s: stderrLineBuf };
+
+    child.stdout?.on('data', (chunk: Buffer) => {
+      stdoutChunks.push(chunk);
+      emitLines(stdoutCursor, 'stdout', chunk.toString('utf-8'));
+    });
+    child.stderr?.on('data', (chunk: Buffer) => {
+      stderrChunks.push(chunk);
+      emitLines(stderrCursor, 'stderr', chunk.toString('utf-8'));
+    });
+
+    const flushPartial = () => {
+      if (!opts.onLine) return;
+      if (stdoutCursor.s[0].length > 0) {
+        try {
+          opts.onLine(stdoutCursor.s[0], 'stdout');
+        } catch {
+          // ignore
+        }
+        stdoutCursor.s[0] = '';
+      }
+      if (stderrCursor.s[0].length > 0) {
+        try {
+          opts.onLine(stderrCursor.s[0], 'stderr');
+        } catch {
+          // ignore
+        }
+        stderrCursor.s[0] = '';
+      }
+    };
 
     child.on('error', (err) => {
       clearTimeout(timer);
@@ -155,6 +218,7 @@ export async function runExternalCodingAgent(
     child.on('close', (code) => {
       clearTimeout(timer);
       if (opts.signal) opts.signal.removeEventListener('abort', onAbort);
+      flushPartial();
 
       const stdout = Buffer.concat(stdoutChunks).toString('utf-8');
       const stderr = Buffer.concat(stderrChunks).toString('utf-8');

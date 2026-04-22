@@ -8,36 +8,31 @@ import {
   DEFAULT_STAGES,
   GITHUB_POLL_INTERVAL_PRESETS,
   NEEDS_JUDGMENT_LABEL,
-  applyGeneratedPrompts,
   buildCronSchedule,
   buildGithubPollCronLine,
   buildHarnextLabelSpecs,
   deleteGithubConnection,
   ensureRepoLabels,
   findCronLine,
-  generateProjectSkills,
-  generateStagePrompts,
   generateStageWorkflow,
   getCodingAgentSpec,
   getGithubConfigPath,
   getGithubPollCronTag,
-  getProjectProfilePath,
   getRepoFromCwd,
   getStageRunner,
-  installBundledSkills,
+  getTechStackPath,
   installCronLine,
   listCodingAgents,
   listRepoAssignableUsers,
   listRepoLabels,
   loadGithubConnection,
-  loadProjectProfile,
+  loadTechStack,
   removeCronLine,
-  resolveAgentSkillsDir,
-  runCodebaseProfiler,
+  runCodeAnalysisPipeline,
   saveGithubConnection,
-  saveProjectProfile,
   setDefault,
   verifyGhAuth,
+  type AnalysisEvent,
   type CodingAgentId,
   type GhResult,
   type GithubActionsRunner,
@@ -45,12 +40,11 @@ import {
   type GithubIssueFilter,
   type GithubPollIntervalMinutes,
   type NormalStage,
-  type ProjectProfile,
   type ReviewLoopStage,
   type StageEntry,
   type StageMode,
-  type StagePromptSpec,
   type StageRunner,
+  type TechStack,
 } from '@harnext/core';
 
 import { editPrompt } from './external-editor.js';
@@ -1173,28 +1167,86 @@ async function removeFlow(opts: ConnectGithubOptions): Promise<void> {
  * Any failure here is soft: we warn and fall back to the baseline so the
  * wizard never blocks the user on flaky agent runs.
  */
+/**
+ * Pretty-print a one-line summary of the tech stack so the user can see
+ * what the agent inferred (or what it's about to reuse).
+ */
+function printTechStackSummary(stack: TechStack): void {
+  const lang = stack.root.language;
+  const fw = stack.root.framework ? `, framework: ${stack.root.framework}` : '';
+  const gen = stack.generatedAt.slice(0, 10);
+  const mono = stack.isMonorepo ? `, monorepo (${stack.packages.length} packages)` : '';
+  console.log(chalk.dim(`      language: ${lang}${fw}${mono}, generated: ${gen}`));
+  if (stack.root.testCommand) console.log(chalk.dim(`      test:     ${stack.root.testCommand}`));
+  if (stack.root.lintCommand) console.log(chalk.dim(`      lint:     ${stack.root.lintCommand}`));
+  if (stack.root.buildCommand) console.log(chalk.dim(`      build:    ${stack.root.buildCommand}`));
+}
+
+/**
+ * Subscribe-style progress printer for the code-analysis pipeline.
+ * The pipeline emits start/ok/warn/error per sub-stage; the CLI prints
+ * a single line per event so the user sees progress without having to
+ * peek at the session dir.
+ */
+function makeAnalysisProgressPrinter(): (e: AnalysisEvent) => void {
+  const labels: Record<AnalysisEvent['stage'], string> = {
+    'tech-stack': 'tech-stack detection',
+    'risk-contract': 'risk contract',
+    'check-scripts': 'check scripts',
+    'project-skills': 'project skills',
+    'stage-prompts': 'stage prompts',
+  };
+  // Trim activity lines to the terminal width so multi-line terminal
+  // wrap doesn't wreck the layout. stdout.columns is unset in CI /
+  // piped mode — fall back to 120.
+  const terminalWidth = (): number => {
+    const c = process.stdout.columns;
+    return typeof c === 'number' && c > 40 ? c : 120;
+  };
+  return (e) => {
+    const label = labels[e.stage];
+    if (e.status === 'start') {
+      console.log(chalk.dim(`    ${label}…`));
+      return;
+    }
+    if (e.status === 'activity') {
+      const prefix = '      · ';
+      const detail = e.detail ?? '';
+      // Reserve room for the prefix; if the line still overflows,
+      // truncate with an ellipsis so the UI stays single-line.
+      const budget = Math.max(20, terminalWidth() - prefix.length - 1);
+      const shown = detail.length > budget ? detail.slice(0, budget - 1) + '…' : detail;
+      console.log(chalk.dim(prefix + shown));
+      return;
+    }
+    if (e.status === 'ok') {
+      console.log(chalk.green(`      ✓ ${label}`));
+      return;
+    }
+    if (e.status === 'warn') {
+      console.log(chalk.yellow(`      warning (${label}): ${e.detail ?? 'unknown'}`));
+      return;
+    }
+    console.log(chalk.red(`      error (${label}): ${e.detail ?? 'unknown'}`));
+  };
+}
+
 async function runAnalysisStep(
   cwd: string,
   codingAgent: CodingAgentId,
   codingAgentModel: string | undefined,
   baselineStages: StageEntry[],
 ): Promise<StageEntry[]> {
-  const existing = loadProjectProfile(cwd);
-  let profile: ProjectProfile | null = null;
+  const existing = loadTechStack(cwd);
+  let reusedStack: TechStack | undefined;
 
   if (existing) {
-    console.log(chalk.dim(`    Existing profile: ${getProjectProfilePath(cwd)}`));
-    console.log(
-      chalk.dim(
-        `      language: ${existing.primaryLanguage}` +
-          (existing.framework ? `, framework: ${existing.framework}` : '') +
-          `, generated: ${existing.generatedAt.slice(0, 10)}`,
-      ),
-    );
+    console.log(chalk.dim(`    Existing analysis: ${getTechStackPath(cwd)}`));
+    printTechStackSummary(existing);
     type Choice = 'reuse' | 'reanalyze' | 'skip';
     const picked = await select<Choice>(
       [
-        { label: 'Reuse existing profile', value: 'reuse', hint: 'fast — no agent run' },
+        { label: 'Reuse existing analysis', value: 'reuse', hint: 'fast — skips tech detection' },
         {
           label: 'Re-analyze the codebase',
           value: 'reanalyze',
@@ -1212,9 +1264,9 @@ async function runAnalysisStep(
       return baselineStages;
     }
     if (picked === 'reuse') {
-      profile = existing;
+      reusedStack = existing;
     }
-    // picked === 'reanalyze' → fall through to the run
+    // picked === 'reanalyze' → fall through (reusedStack stays undefined)
   } else {
     const shouldAnalyze = await confirm(
       `Analyze this codebase with ${codingAgent} to tailor prompts and skills?`,
@@ -1223,99 +1275,61 @@ async function runAnalysisStep(
     if (!shouldAnalyze) {
       return baselineStages;
     }
-  }
-
-  if (!profile) {
     console.log(
       chalk.dim(`    Spinning up ${codingAgent} to survey the codebase (~30-120s)…`),
     );
-    const result = await runCodebaseProfiler({
-      cwd,
-      codingAgent,
-      codingAgentModel,
-    });
-    if (!result.profile) {
-      console.log(
-        chalk.yellow(`  Profile generation failed: ${result.error ?? 'unknown error'}`),
-      );
-      console.log(chalk.dim('  Falling back to generic stage prompts.'));
-      return baselineStages;
-    }
-    profile = result.profile;
-    try {
-      saveProjectProfile(cwd, profile);
-      console.log(chalk.green(`  Profile saved → ${getProjectProfilePath(cwd)}`));
-    } catch (err) {
-      console.log(
-        chalk.yellow(
-          `  Could not persist profile: ${err instanceof Error ? err.message : String(err)}`,
-        ),
-      );
-    }
   }
 
-  // Print a short summary of the profile so the user knows what the agent will use.
-  console.log(chalk.dim(`    language:   ${profile.primaryLanguage}`));
-  if (profile.framework) console.log(chalk.dim(`    framework:  ${profile.framework}`));
-  if (profile.testCommand) console.log(chalk.dim(`    test:       ${profile.testCommand}`));
-  if (profile.lintCommand) console.log(chalk.dim(`    lint:       ${profile.lintCommand}`));
-  if (profile.buildCommand) console.log(chalk.dim(`    build:      ${profile.buildCommand}`));
-
-  // Install bundled skills into the agent-specific skills directory.
-  const skillsDir = resolveAgentSkillsDir(cwd, codingAgent);
-  console.log(chalk.dim(`    Installing bundled skills → ${skillsDir}`));
-  const bundled = installBundledSkills(cwd, codingAgent);
-  if (bundled.error) {
-    console.log(chalk.yellow(`      warning: ${bundled.error}`));
-  }
-  if (bundled.installed.length > 0) {
-    console.log(chalk.green(`      installed: ${bundled.installed.join(', ')}`));
-  }
-  if (bundled.skipped.length > 0) {
-    console.log(chalk.dim(`      skipped (already present): ${bundled.skipped.join(', ')}`));
-  }
-
-  // Generate project-specific skills off the profile.
-  console.log(chalk.dim(`    Generating project skills with ${codingAgent}…`));
-  const projSkills = await generateProjectSkills({
+  const result = await runCodeAnalysisPipeline({
     cwd,
     codingAgent,
     codingAgentModel,
-    profile,
+    baselineStages,
+    techStack: reusedStack,
+    onProgress: makeAnalysisProgressPrinter(),
   });
-  if (projSkills.error) {
-    console.log(chalk.yellow(`      warning: ${projSkills.error}`));
+
+  // Summary after the pipeline returns.
+  if (!reusedStack) {
+    printTechStackSummary(result.techStack);
+    if (result.techStack.root.language !== 'unknown') {
+      console.log(chalk.green(`    Analysis saved → ${getTechStackPath(cwd)}`));
+    }
   }
-  if (projSkills.generated.length > 0) {
-    console.log(chalk.green(`      generated: ${projSkills.generated.join(', ')}`));
+  if (result.contract) {
+    const tiers = Object.keys(result.contract.riskTierRules);
+    const allChecks = Array.from(
+      new Set(
+        tiers.flatMap((t) => result.contract!.mergePolicy[t].requiredChecks),
+      ),
+    );
+    console.log(
+      chalk.dim(
+        `      contract:  ${tiers.length} tier${tiers.length === 1 ? '' : 's'} (${tiers.join(', ')}) · ${allChecks.length} check${allChecks.length === 1 ? '' : 's'}`,
+      ),
+    );
   }
-  if (projSkills.missing.length > 0) {
-    console.log(chalk.dim(`      missing: ${projSkills.missing.join(', ')}`));
+  if (result.scriptsGenerated.length > 0) {
+    const names = result.scriptsGenerated.map((p) => p.split('/').pop());
+    console.log(chalk.dim(`      scripts generated: ${names.join(', ')}`));
+  }
+  if (result.scriptsPreserved.length > 0) {
+    const names = result.scriptsPreserved.map((p) => p.split('/').pop());
+    console.log(chalk.dim(`      scripts preserved: ${names.join(', ')}`));
+  }
+  if (result.skillsInstalled.length > 0) {
+    console.log(chalk.dim(`      bundled skills installed: ${result.skillsInstalled.join(', ')}`));
+  }
+  if (result.skillsGenerated.length > 0) {
+    console.log(chalk.dim(`      project skills generated: ${result.skillsGenerated.join(', ')}`));
+  }
+  if (result.sessionDir) {
+    console.log(
+      chalk.dim(`      session retained for debugging: ${result.sessionDir}`),
+    );
   }
 
-  // Tailor stage prompts.
-  console.log(chalk.dim(`    Generating stage prompts with ${codingAgent}…`));
-  const specs: StagePromptSpec[] = baselineStages.map((s) => ({
-    id: s.id,
-    kind: s.kind === 'review-loop' ? 'review-loop' : 'normal',
-  }));
-  const stageResult = await generateStagePrompts({
-    cwd,
-    codingAgent,
-    codingAgentModel,
-    profile,
-    specs,
-  });
-  if (stageResult.error) {
-    console.log(chalk.yellow(`      warning: ${stageResult.error}`));
-    console.log(chalk.dim('      keeping generic prompts where tailored ones are missing.'));
-  }
-  const tailoredIds = Object.keys(stageResult.prompts);
-  if (tailoredIds.length > 0) {
-    console.log(chalk.green(`      tailored: ${tailoredIds.join(', ')}`));
-  }
-
-  return applyGeneratedPrompts(baselineStages, stageResult.prompts);
+  return result.stages;
 }
 
 /**
@@ -1379,7 +1393,7 @@ async function createFlow(
   }
 
   // Step 1: verify gh auth.
-  console.log(chalk.bold('  Step 1/4: verify gh CLI'));
+  console.log(chalk.bold('  Step 1: verify gh CLI'));
   const auth = verifyGhAuth();
   if (!auth.ok) {
     console.log(chalk.red('  gh is not ready: ') + auth.message);
@@ -1415,36 +1429,19 @@ async function createFlow(
   }
   console.log();
 
-  // Step 2: polling interval.
-  console.log(chalk.bold('  Step 2/5: polling interval'));
-  const interval = await pickInterval(current?.pollIntervalMinutes);
-  if (!interval) {
-    console.log(chalk.dim('  Cancelled.'));
-    console.log();
-    return;
-  }
-  console.log();
-
-  // Step 3: filter.
-  console.log(chalk.bold('  Step 3/5: issue filter (optional)'));
-  const filter = await pickFilter(detectedRepo, current?.filter);
-  if (!filter) {
-    console.log(chalk.dim('  Cancelled.'));
-    console.log();
-    return;
-  }
-  console.log();
-
-  // Step 4: analyze the codebase and tailor prompts + skills.
-  console.log(chalk.bold('  Step 4/5: analyze codebase'));
+  // Step 2: workflow stages. We run the codebase analyzer first (as a
+  // sub-step inside this step) so the stage picker shows prompts already
+  // tailored to this repo, then let the user edit stages and choose where
+  // each runs.
+  console.log(chalk.bold('  Step 2: workflow stages'));
   console.log(
     chalk.dim(
-      '    Ask the coding agent to survey this repo, generate tailored stage prompts,',
+      '    First we offer to analyze the codebase to tailor stage prompts, then you pick',
     ),
   );
   console.log(
     chalk.dim(
-      '    and install skills. You can skip this and use the generic defaults instead.',
+      '    the pipeline and where each stage runs (local poller or GitHub Actions).',
     ),
   );
   const baselineStages = current?.stages ?? DEFAULT_STAGES;
@@ -1455,9 +1452,6 @@ async function createFlow(
     baselineStages,
   );
   console.log();
-
-  // Step 5: workflow stages.
-  console.log(chalk.bold('  Step 5/5: workflow stages'));
   console.log(
     chalk.dim('    Each stage has its own prompt and mode. Accept defaults or customize.'),
   );
@@ -1471,11 +1465,52 @@ async function createFlow(
 
   // Per-stage runner picker. Lets the user punch individual stages over to
   // GitHub Actions (connect existing, or generate via the chosen agent).
+  // Runs inside Step 2 because its outcome (any local stage?) decides
+  // whether we even need to ask about the cron poll interval below.
   await runRunnersStep(
     stages,
     { repo: detectedRepo, codingAgent, codingAgentModel },
     opts.cwd,
   );
+
+  // Step 3: filter.
+  console.log(chalk.bold('  Step 3: issue filter (optional)'));
+  const filter = await pickFilter(detectedRepo, current?.filter);
+  if (!filter) {
+    console.log(chalk.dim('  Cancelled.'));
+    console.log();
+    return;
+  }
+  console.log();
+
+  // Step 4: polling interval — only when at least one stage runs locally.
+  // The cron poller exists to kick off local stages; if every stage is on
+  // GitHub Actions, the label-triggered workflow handles dispatch and
+  // polling is pointless. We skip the prompt and the cron install entirely
+  // in that case, and strip any stale cron line from a previous setup.
+  const needsPolling = stages.some((s) => getStageRunner(s).kind === 'local');
+  let interval: GithubPollIntervalMinutes;
+  if (needsPolling) {
+    console.log(chalk.bold('  Step 4: polling interval'));
+    const picked = await pickInterval(current?.pollIntervalMinutes);
+    if (!picked) {
+      console.log(chalk.dim('  Cancelled.'));
+      console.log();
+      return;
+    }
+    interval = picked;
+    console.log();
+  } else {
+    // Keep the config field populated with a sensible default so the
+    // stored shape is unchanged — nothing reads it when there's no cron.
+    interval = current?.pollIntervalMinutes ?? 60;
+    console.log(
+      chalk.dim(
+        '  All stages run on GitHub Actions — skipping poll interval and cron install.',
+      ),
+    );
+    console.log();
+  }
 
   const cfg: GithubConnectionConfig = {
     repo: detectedRepo,
@@ -1488,27 +1523,36 @@ async function createFlow(
     updatedAt: Date.now(),
   };
 
-  const schedule = buildCronSchedule(cfg.pollIntervalMinutes);
   const tag = getGithubPollCronTag(opts.cwd);
-  const cronLine = buildGithubPollCronLine({
-    schedule,
-    cliPath: opts.cliPath,
-    cwd: opts.cwd,
-    tag,
-    nodePath: opts.nodePath,
-    path: process.env.PATH,
-    sshAuthSock: process.env.SSH_AUTH_SOCK,
-  });
-  const existingCron = findCronLine(tag);
+  let cronLine: string | null = null;
+  let existingCron: string | null = null;
+  if (needsPolling) {
+    const schedule = buildCronSchedule(cfg.pollIntervalMinutes);
+    cronLine = buildGithubPollCronLine({
+      schedule,
+      cliPath: opts.cliPath,
+      cwd: opts.cwd,
+      tag,
+      nodePath: opts.nodePath,
+      path: process.env.PATH,
+      sshAuthSock: process.env.SSH_AUTH_SOCK,
+    });
+    existingCron = findCronLine(tag);
+  }
 
   console.log(chalk.bold('  Ready to save:'));
   printConfig(cfg);
   console.log();
-  console.log(chalk.dim(`    cron ${existingCron ? '(replace)' : '(install)'}:`));
-  console.log(chalk.dim(`      ${cronLine}`));
-  console.log();
+  if (cronLine) {
+    console.log(chalk.dim(`    cron ${existingCron ? '(replace)' : '(install)'}:`));
+    console.log(chalk.dim(`      ${cronLine}`));
+    console.log();
+  }
 
-  if (!(await confirm('Save this connection and install the cron line?', true))) {
+  const confirmPrompt = cronLine
+    ? 'Save this connection and install the cron line?'
+    : 'Save this connection?';
+  if (!(await confirm(confirmPrompt, true))) {
     console.log(chalk.dim('  Cancelled.'));
     console.log();
     return;
@@ -1516,7 +1560,14 @@ async function createFlow(
 
   try {
     saveGithubConnection(opts.cwd, cfg);
-    installCronLine(cronLine, tag);
+    if (cronLine) {
+      installCronLine(cronLine, tag);
+    } else {
+      // Previous setup may have written a cron line that's now stale
+      // (e.g. the user moved every stage to GitHub Actions). Drop it so we
+      // don't keep polling for work that's dispatched elsewhere.
+      removeCronLine(tag);
+    }
 
     console.log(chalk.dim('  Ensuring pipeline labels exist on the repo…'));
     const labelResult = ensureRepoLabels(cfg.repo, buildHarnextLabelSpecs(cfg.stages));
@@ -1536,9 +1587,14 @@ async function createFlow(
       );
     }
 
-    console.log(chalk.green('  GitHub connection saved and poller scheduled.'));
+    const savedMsg = cronLine
+      ? '  GitHub connection saved and poller scheduled.'
+      : '  GitHub connection saved (no poller — all stages on GitHub Actions).';
+    console.log(chalk.green(savedMsg));
     console.log(chalk.dim(`    config: ${getGithubConfigPath(opts.cwd)}`));
-    console.log(chalk.dim(`    cron tag: ${tag}`));
+    if (cronLine) {
+      console.log(chalk.dim(`    cron tag: ${tag}`));
+    }
     console.log();
   } catch (err) {
     console.log(

@@ -1,0 +1,62 @@
+id: project-skills
+version: 1
+description: >
+  Generate project-specific Agent Skills tailored to the repository.
+  Each skill is a self-contained folder with a SKILL.md the coding
+  agent reads when its description matches the current task.
+variables:
+  - skillsDir
+  - slugsList
+  - techStackJson
+  - sessionDir
+  - cwd
+prompt: |
+  You are generating **Agent Skills** for harnext, tailored to this
+  codebase. Each skill is a self-contained folder with a `SKILL.md` file
+  the coding agent reads when its description matches the current task.
+
+  Write each skill directly to disk. Do **not** emit the content in
+  chat. Skills live under:
+
+    {{skillsDir}}
+
+  Per skill, create:
+
+    {{skillsDir}}/<slug>/SKILL.md
+
+  The `SKILL.md` must start with YAML frontmatter:
+
+    ---
+    name: <slug>
+    description: <one-sentence trigger — what task this skill applies to>
+    ---
+
+    # <slug>
+
+    <body in markdown — steps, commands, examples. Be concrete. Reference
+    this repo's actual paths and commands from the TechStack below.>
+
+  Rules:
+    - The `name` field MUST equal the folder slug (lowercase a-z, digits,
+      hyphens only).
+    - The `description` must be a crisp one-sentence trigger. No fluff.
+    - The body must use this repo's **actual** commands. Don't suggest
+      `npm test` if `root.testCommand` is `pnpm -w test`.
+    - Keep each skill focused (40–150 lines of markdown). If a skill
+      balloons past that, split off sub-steps or trim detail.
+    - When the TechStack has monorepo packages, mention the package
+      paths where relevant (e.g. per-workspace lint commands).
+
+  Generate exactly these skills:
+
+  {{slugsList}}
+
+  TechStack (use this to ground every skill in repo-specific facts):
+
+  {{techStackJson}}
+
+  After writing every skill, reply with one short sentence listing the
+  slugs you wrote. Do not paste the SKILL.md contents into the reply.
+
+  Session scratch dir (for intermediate notes if needed): {{sessionDir}}
+  Repository root (cwd): {{cwd}}

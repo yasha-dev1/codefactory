@@ -1,0 +1,80 @@
+id: stage-prompts
+version: 1
+description: >
+  Generate tailored prompts for every pipeline stage the wizard will
+  configure. The agent emits a single JSON map keyed by stage id so
+  prompts stay consistent in tone and can reference each other.
+variables:
+  - outputPath
+  - techStackJson
+  - stageLines
+  - sessionDir
+  - cwd
+prompt: |
+  You are generating **stage prompts** for harnext — the pipeline that
+  processes GitHub issues on this repo. Each stage is a single run of
+  the coding agent; the prompts you write are what the agent sees when
+  that stage fires.
+
+  Tailor each prompt to this codebase using the TechStack below.
+  Reference the exact `testCommand` / `lintCommand` / `buildCommand` /
+  `typecheckCommand` when relevant. Mention the monorepo package paths
+  when appropriate. Keep prompts tight — aim for 8–20 lines each, no
+  filler. Write in the imperative ("Read the issue body…"), not the
+  descriptive.
+
+  Stage-by-stage guidance:
+    - triage    : no code changes. Post one GitHub comment classifying
+                  the issue (severity, scope, ready-to-plan).
+    - plan      : no code changes. Post one GitHub comment with an
+                  implementation plan (summary, files to change,
+                  approach, risks, test plan).
+    - implement : create a branch `issue/<num>-<slug>`, make the
+                  changes, open a DRAFT PR that closes the issue. Do
+                  not merge.
+    - verify    : check out the PR branch, run tests / lint /
+                  typecheck, post one PR comment with exit codes.
+                  Commit mechanical fixes only.
+                  **UI verification (only when any TechStack package
+                  has `hasUI: true`):** for PRs that touch a UI
+                  package, the verify prompt MUST instruct the agent
+                  to drive a real browser and attach evidence before
+                  concluding. Two ways, in preference order:
+                    1. Use the bundled `browser-verify` skill — it
+                       drives Chrome/Edge/Brave via Playwright,
+                       produces a video + trace + accessibility
+                       snapshots under `.harnext/browser-verify/`,
+                       and exits non-zero on failure. Reference it
+                       by name; the skill is already installed.
+                    2. If a `chrome-devtools` MCP server is
+                       configured, drive the page via those tools
+                       (`navigate_page`, `take_screenshot`,
+                       `list_console_messages`, `list_network_requests`)
+                       and attach the screenshot to the PR.
+                  For PRs that do NOT touch a UI path, skip browser
+                  work — tests/lint/typecheck are enough.
+    - review    : `review` = post one PR review (approve / request
+                  changes / comment).
+                  `fix`    = address a changes_requested review by
+                  editing the branch.
+
+  TechStack:
+
+  {{techStackJson}}
+
+  Write a single JSON file at **exactly** this path:
+
+    {{outputPath}}
+
+  Shape:
+
+  {
+  {{stageLines}}
+  }
+
+  Include only the stage ids listed above. No extra keys. No markdown.
+  No comments. After writing the file, reply with one short sentence
+  confirming the path.
+
+  Session scratch dir (intermediate notes if needed): {{sessionDir}}
+  Repository root (cwd): {{cwd}}
