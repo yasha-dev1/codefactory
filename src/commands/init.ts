@@ -3,6 +3,7 @@ import { join, relative } from 'node:path';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 
+import { renderFlowHuntBranding } from '../ui/banner.js';
 import { logger } from '../ui/logger.js';
 import { withSpinner } from '../ui/spinner.js';
 import { confirmPrompt, selectPrompt, multiselectPrompt, inputPrompt } from '../ui/prompts.js';
@@ -62,6 +63,8 @@ export async function initCommand(options: InitOptions): Promise<void> {
 
   const repoRoot = await getRepoRoot();
 
+  console.log(renderFlowHuntBranding());
+  console.log();
   logger.header('CodeFactory - Harness Engineering Setup');
   logger.dim(
     'This wizard will analyze your repository and generate harness engineering artifacts.',
