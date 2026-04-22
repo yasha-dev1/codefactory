@@ -4,9 +4,9 @@
   "description": "AI coding agent with harness engineering — interactive REPL, MCP support, and a GitHub-issue-driven workflow runner.",
   "type": "module",
   "bin": {
-    "harnext": "./dist/index.js"
+    "harnext": "dist/index.js"
   },
-  "main": "./dist/index.js",
+  "main": "dist/index.js",
   "files": [
     "dist",
     "README.md"
