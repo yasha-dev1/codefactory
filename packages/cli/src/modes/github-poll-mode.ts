@@ -4,7 +4,10 @@ import {
   acquireLock,
   appendGithubPollTick,
   createAgentSession,
+  detectOpenedPr,
+  fetchLatestReviewVerdict,
   fetchUpdatedIssues,
+  getCodingAgentSpec,
   persistPointer,
   pruneAgentRunLogs,
   pruneStaleWorktrees,
@@ -12,6 +15,7 @@ import {
   releaseLock,
   releaseWorktreeForItem,
   resolveWorktreeForItem,
+  runExternalCodingAgent,
   runPollTick,
   transitionLabels,
   writeAgentRunLog,
@@ -71,10 +75,12 @@ export interface GithubPollModeOptions {
   cwd: string;
   config: GithubConnectionConfig;
   /**
-   * Knobs for building per-item AgentSessions. cwd is supplied internally
-   * (the worktree path for the current item) so the caller doesn't set it.
+   * Knobs for building per-item AgentSessions when `config.codingAgent` is
+   * `harnext`. cwd is supplied internally (the worktree path for the current
+   * item) so the caller doesn't set it. Ignored for external coding agents,
+   * which spawn their own CLI per stage.
    */
-  session: GithubPollSessionFactoryOptions;
+  session?: GithubPollSessionFactoryOptions;
 }
 
 function isPr(item: GithubIssueItem): boolean {
@@ -109,16 +115,23 @@ export async function runGithubPollMode(
     return 0;
   }
 
+  // Which coding agent to dispatch to. `harnext` runs the pi-agent-core
+  // in-process session; external ids spawn the agent's CLI binary per stage.
+  const codingAgent = config.codingAgent;
+  const externalSpec = codingAgent === 'harnext' ? undefined : getCodingAgentSpec(codingAgent);
+
   try {
     // Per-run capture buffers reset inside runAgent() before each invocation.
     let lastAssistantText = '';
     let toolErrored = false;
     let events: AgentRunLogEvent[] = [];
 
-    // Current item's session + subscription handle. Set by resolveWorktree,
-    // cleared by releaseWorktree.
+    // Current item's session + subscription handle (only used when codingAgent
+    // is 'harnext'). For external agents we carry the worktree path instead,
+    // since each stage run is a fresh spawn rather than a long-lived session.
     let currentSession: AgentSession | undefined;
     let currentUnsubscribe: (() => void) | undefined;
+    let currentWorktreePath: string | undefined;
 
     const subscribe = (session: AgentSession): (() => void) =>
       session.subscribe(async (event: AgentEvent) => {
@@ -157,6 +170,29 @@ export async function runGithubPollMode(
       });
 
     const runAgent = async (prompt: string): Promise<AgentRunResult> => {
+      if (externalSpec) {
+        if (!currentWorktreePath) {
+          return {
+            exit: 1,
+            durationMs: 0,
+            output: '',
+            error: 'no active worktree for item; resolveWorktree did not run',
+          };
+        }
+        if (!config.codingAgentModel) {
+          return {
+            exit: 1,
+            durationMs: 0,
+            output: '',
+            error: `coding agent "${externalSpec.id}" requires codingAgentModel in config`,
+          };
+        }
+        return runExternalCodingAgent(externalSpec, prompt, {
+          cwd: currentWorktreePath,
+          modelId: config.codingAgentModel,
+        });
+      }
+
       lastAssistantText = '';
       toolErrored = false;
       events = [];
@@ -207,29 +243,36 @@ export async function runGithubPollMode(
         output: `worktree at ${record.path} (branch ${record.branch})`,
       });
 
-      const { session, diagnostics } = await createAgentSession({
-        provider: options.session.provider,
-        modelId: options.session.modelId,
-        thinkingLevel: options.session.thinkingLevel,
-        systemPrompt: options.session.systemPrompt,
-        cwd: record.path,
-        quiet: true,
-      });
-      for (const d of diagnostics) {
-        appendGithubPollTick(cwd, {
-          ts: new Date().toISOString(),
-          itemNumber: item.number,
-          itemKind,
-          stageId: `(${d.source}-${d.type})`,
-          stageLabel: '',
-          mode: 'yolo',
-          exit: 0,
-          durationMs: 0,
-          output: `${d.message} (${d.path})`,
+      currentWorktreePath = record.path;
+
+      if (!externalSpec) {
+        if (!options.session) {
+          throw new Error('harnext coding agent requires session options to be provided');
+        }
+        const { session, diagnostics } = await createAgentSession({
+          provider: options.session.provider,
+          modelId: options.session.modelId,
+          thinkingLevel: options.session.thinkingLevel,
+          systemPrompt: options.session.systemPrompt,
+          cwd: record.path,
+          quiet: true,
         });
+        for (const d of diagnostics) {
+          appendGithubPollTick(cwd, {
+            ts: new Date().toISOString(),
+            itemNumber: item.number,
+            itemKind,
+            stageId: `(${d.source}-${d.type})`,
+            stageLabel: '',
+            mode: 'yolo',
+            exit: 0,
+            durationMs: 0,
+            output: `${d.message} (${d.path})`,
+          });
+        }
+        currentSession = session;
+        currentUnsubscribe = subscribe(session);
       }
-      currentSession = session;
-      currentUnsubscribe = subscribe(session);
       return record;
     };
 
@@ -243,6 +286,7 @@ export async function runGithubPollMode(
         currentUnsubscribe = undefined;
       }
       currentSession = undefined;
+      currentWorktreePath = undefined;
       await releaseWorktreeForItem({ cwd, itemNumber: item.number });
       appendGithubPollTick(cwd, {
         ts: new Date().toISOString(),
@@ -261,6 +305,8 @@ export async function runGithubPollMode(
       fetch: fetchUpdatedIssues,
       refetch: refetchItem,
       transition: transitionLabels,
+      fetchLatestReviewVerdict,
+      detectOpenedPr: (input) => detectOpenedPr(input),
       runAgent,
       resolveWorktree,
       releaseWorktree,

@@ -1,6 +1,13 @@
 import { VERSION } from '@harnext/core';
 
-export type Mode = 'interactive' | 'print' | 'heartbeat' | 'github-poll' | 'mcp';
+export type Mode =
+  | 'interactive'
+  | 'print'
+  | 'heartbeat'
+  | 'github-poll'
+  | 'mcp'
+  | 'setup'
+  | 'status';
 export type McpVerb = 'add' | 'remove' | 'list' | 'reconnect';
 export type McpScopeArg = 'user' | 'project';
 
@@ -38,6 +45,14 @@ export function parseArgs(argv: string[]): Args {
 
   if (argv[0] === 'mcp') {
     return parseMcpArgs(argv.slice(1), args);
+  }
+
+  if (argv[0] === 'setup') {
+    return parseSetupArgs(argv.slice(1), args);
+  }
+
+  if (argv[0] === 'status') {
+    return parseStatusArgs(argv.slice(1), args);
   }
 
   let i = 0;
@@ -91,6 +106,77 @@ export function parseArgs(argv: string[]): Args {
   }
 
   return args;
+}
+
+function parseStatusArgs(rest: string[], args: Args): Args {
+  args.mode = 'status';
+  let i = 0;
+  while (i < rest.length) {
+    const arg = rest[i];
+    switch (arg) {
+      case '--cwd':
+        args.cwd = rest[++i] ?? args.cwd;
+        break;
+      case '-h':
+      case '--help':
+        printStatusHelp();
+        process.exit(0);
+        break;
+      default:
+        break;
+    }
+    i++;
+  }
+  return args;
+}
+
+export function printStatusHelp(): void {
+  console.log(`
+harnext status - Show active coding-agent runs for this project
+
+Usage:
+  harnext status [--cwd <directory>]
+
+Lists each registered worktree (per open issue/PR), the branch checked out,
+any coding-agent process currently running against it (with stage + elapsed
+time), and the uncommitted file changes present in the worktree.
+`);
+}
+
+function parseSetupArgs(rest: string[], args: Args): Args {
+  args.mode = 'setup';
+  let i = 0;
+  while (i < rest.length) {
+    const arg = rest[i];
+    switch (arg) {
+      case '--cwd':
+        args.cwd = rest[++i] ?? args.cwd;
+        break;
+      case '-h':
+      case '--help':
+        printSetupHelp();
+        process.exit(0);
+        break;
+      default:
+        break;
+    }
+    i++;
+  }
+  return args;
+}
+
+export function printSetupHelp(): void {
+  console.log(`
+harnext setup - Configure this project's coding agent and pipeline
+
+Usage:
+  harnext setup [--cwd <directory>]
+
+Asks which coding agent should drive the pipeline (harnext | claude-code |
+codex), picks a model for that agent, then runs the GitHub connection
+wizard (polling interval, issue filter, workflow stages). When a config
+already exists, asks first whether to keep it.
+`);
 }
 
 function parseMcpArgs(rest: string[], args: Args): Args {
@@ -176,6 +262,8 @@ harnext - AI coding agent
 
 Usage:
   harnext [options] [message...]
+  harnext setup [--cwd <directory>]
+  harnext mcp <verb> [...]
 
 Options:
   -p, --print              Run in non-interactive (single-shot) mode
@@ -188,5 +276,10 @@ Options:
   --cwd <directory>        Working directory [default: .]
   -h, --help               Show this help
   -v, --version            Show version
+
+Subcommands:
+  setup                    Pick a coding agent and configure the project pipeline
+  status                   Show active coding-agent runs (worktrees + processes)
+  mcp                      Manage MCP servers (run \`harnext mcp --help\`)
 `);
 }

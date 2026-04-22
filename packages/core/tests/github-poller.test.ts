@@ -20,6 +20,7 @@ import {
   acquireLock,
   buildGithubPollCronLine,
   buildStagePrompt,
+  detectOpenedPr,
   detectStageForItem,
   getGithubPollPaths,
   getGithubRunsDir,
@@ -30,11 +31,14 @@ import {
   writeAgentRunLog,
   type AgentRunLogRecord,
   type AgentRunResult,
+  type DetectOpenedPrInput,
+  type DetectOpenedPrResult,
   type GithubIssueItem,
   type PollTickIO,
   type RunAgentOptions,
   type StageTickRecord,
 } from '../src/github-poller.js';
+import type { GhResult } from '../src/github-connection.js';
 import type { WorktreeRecord } from '../src/worktree.js';
 import { NEEDS_JUDGMENT_LABEL } from '../src/github-connection.js';
 
@@ -78,6 +82,7 @@ function baseConfig(overrides: Partial<GithubConnectionConfig> = {}): GithubConn
     filter: { kind: 'none' },
     stages: DEFAULT_STAGES.map((s) => ({ ...s })),
     lastSeenUpdatedAt: '2026-04-19T10:00:00Z',
+    codingAgent: 'harnext',
     updatedAt: Date.now(),
     ...overrides,
   };
@@ -96,6 +101,18 @@ function makeIo(opts: {
    */
   refetchResults?: GithubIssueItem[];
   transitionFailOn?: Array<{ itemNumber: number; removeLabel: string; message: string }>;
+  /**
+   * FIFO of review verdicts returned by fetchLatestReviewVerdict. Tests that
+   * don't exercise review-loop stages can leave this unset.
+   */
+  verdictResults?: Array<'approved' | 'changes_requested' | 'commented' | 'none'>;
+  /**
+   * FIFO of detectOpenedPr results. When absent, the IO does not supply a
+   * detector (the poller falls back to today's issue-only transition).
+   * Each entry can be either a concrete result or `undefined` to simulate
+   * "no PR detected this run".
+   */
+  detectOpenedPrResults?: Array<DetectOpenedPrResult | undefined>;
 }): PollTickIO & {
   ticks: StageTickRecord[];
   prompts: string[];
@@ -103,6 +120,8 @@ function makeIo(opts: {
   transitions: Array<{ remove: string; add?: string; itemNumber: number }>;
   refetches: number[];
   warnings: string[];
+  verdictQueries: number[];
+  detectCalls: DetectOpenedPrInput[];
 } {
   const ticks: StageTickRecord[] = [];
   const prompts: string[] = [];
@@ -110,9 +129,13 @@ function makeIo(opts: {
   const transitions: Array<{ remove: string; add?: string; itemNumber: number }> = [];
   const refetches: number[] = [];
   const warnings: string[] = [];
+  const verdictQueries: number[] = [];
+  const detectCalls: DetectOpenedPrInput[] = [];
 
   const agentQueue = [...opts.agentResults];
   const refetchQueue = [...(opts.refetchResults ?? [])];
+  const verdictQueue = [...(opts.verdictResults ?? [])];
+  const detectQueue = opts.detectOpenedPrResults ? [...opts.detectOpenedPrResults] : undefined;
 
   const io: PollTickIO = {
     fetch: () => ({ ok: true, value: opts.items }),
@@ -145,9 +168,34 @@ function makeIo(opts: {
     warn: (m) => {
       warnings.push(m);
     },
+    fetchLatestReviewVerdict: (_repo, prNumber) => {
+      verdictQueries.push(prNumber);
+      const next = verdictQueue.shift();
+      if (!next) throw new Error(`test ran out of scripted verdict results for PR #${prNumber}`);
+      return { ok: true, value: next };
+    },
   };
 
-  return Object.assign(io, { ticks, prompts, promptOpts, transitions, refetches, warnings });
+  if (detectQueue) {
+    io.detectOpenedPr = async (input) => {
+      detectCalls.push(input);
+      if (detectQueue.length === 0) {
+        throw new Error(`test ran out of scripted detectOpenedPr results for #${input.issueNumber}`);
+      }
+      return detectQueue.shift();
+    };
+  }
+
+  return Object.assign(io, {
+    ticks,
+    prompts,
+    promptOpts,
+    transitions,
+    refetches,
+    warnings,
+    verdictQueries,
+    detectCalls,
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -240,19 +288,80 @@ describe('runPollTick', () => {
     expect(io.prompts).toHaveLength(0);
   });
 
-  it('advances pointer past items without stage labels', async () => {
-    const item = makeItem({
+  it('auto-labels an issue with no stage label as the first stage and runs it', async () => {
+    const stages: StageDefinition[] = [
+      { id: 'triage', label: 'harnext:triage', prompt: 'triage', mode: 'human-approval' },
+    ];
+    const initial = makeItem({
       number: 5,
       labels: [{ name: 'bug' }],
       updated_at: '2026-04-19T12:30:00Z',
+    });
+    const afterLabel = makeItem({
+      ...initial,
+      labels: [{ name: 'bug' }, { name: 'harnext:triage' }],
+    });
+    const cfg = baseConfig({ stages });
+    const io = makeIo({
+      items: [initial],
+      refetchResults: [afterLabel],
+      agentResults: [{ exit: 0, durationMs: 1, output: 'triaged' }],
+    });
+    const result = await runPollTick(cfg, io);
+    expect(result.processed).toBe(1);
+    // First transition is the auto-label (empty remove, add first stage).
+    expect(io.transitions[0]).toEqual({
+      itemNumber: 5,
+      remove: '',
+      add: 'harnext:triage',
+    });
+    expect(io.prompts).toHaveLength(1);
+    expect(io.ticks[0].stageId).toBe('triage');
+  });
+
+  it('does NOT auto-label items parked on awaiting-approval (would restart chain in a loop)', async () => {
+    const item = makeItem({
+      number: 6,
+      labels: [{ name: AWAITING_APPROVAL_LABEL }, { name: 'cleanup' }],
+      updated_at: '2026-04-19T13:00:00Z',
     });
     const cfg = baseConfig();
     const io = makeIo({ items: [item], agentResults: [] });
     const result = await runPollTick(cfg, io);
     expect(result.processed).toBe(0);
     expect(result.newPointer).toBe(item.updated_at);
-    expect(io.prompts).toHaveLength(0);
     expect(io.transitions).toHaveLength(0);
+    expect(io.prompts).toHaveLength(0);
+  });
+
+  it('does NOT auto-label items parked on needs-judgment', async () => {
+    const item = makeItem({
+      number: 8,
+      labels: [{ name: NEEDS_JUDGMENT_LABEL }],
+      updated_at: '2026-04-19T13:05:00Z',
+    });
+    const cfg = baseConfig();
+    const io = makeIo({ items: [item], agentResults: [] });
+    const result = await runPollTick(cfg, io);
+    expect(result.processed).toBe(0);
+    expect(io.transitions).toHaveLength(0);
+    expect(io.prompts).toHaveLength(0);
+  });
+
+  it('skips PRs that have no stage label (auto-entry is issues-only)', async () => {
+    const pr = makeItem({
+      number: 99,
+      labels: [{ name: 'bug' }],
+      pull_request: { html_url: 'https://example/pr' },
+      updated_at: '2026-04-19T12:30:00Z',
+    });
+    const cfg = baseConfig();
+    const io = makeIo({ items: [pr], agentResults: [] });
+    const result = await runPollTick(cfg, io);
+    expect(result.processed).toBe(0);
+    expect(result.newPointer).toBe(pr.updated_at);
+    expect(io.transitions).toHaveLength(0);
+    expect(io.prompts).toHaveLength(0);
   });
 
   it('stops and adds awaiting-approval label for human-approval stage', async () => {
@@ -864,5 +973,521 @@ describe('runPollTick · worktree hooks', () => {
     });
     await runPollTick(baseConfig({ stages }), io);
     expect(io.releaseCalls).toEqual([]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// review-loop stage
+// ─────────────────────────────────────────────────────────────────────
+
+import { NEEDS_JUDGMENT_LABEL as NJL } from '../src/github-connection.js';
+import type { StageEntry, ReviewLoopStage } from '../src/github-connection.js';
+
+describe('runPollTick — review-loop stage', () => {
+  function makePr(overrides: Partial<GithubIssueItem> = {}): GithubIssueItem {
+    return makeItem({
+      number: 100,
+      pull_request: { html_url: 'https://github.com/example/repo/pull/100' },
+      labels: [{ name: 'harnext:review-loop' }],
+      ...overrides,
+    });
+  }
+
+  const reviewLoop: ReviewLoopStage = {
+    kind: 'review-loop',
+    id: 'review-loop',
+    label: 'harnext:review-loop',
+    maxIterations: 3,
+    review: { prompt: 'REVIEW' },
+    fix: { prompt: 'FIX' },
+    onExit: 'human-approval',
+  };
+
+  it('approves on first pass — advances to awaiting-approval, no fix', async () => {
+    const pr = makePr();
+    const stages: StageEntry[] = [reviewLoop];
+    const io = makeIo({
+      items: [pr],
+      agentResults: [{ exit: 0, durationMs: 5, output: 'reviewed' }],
+      verdictResults: ['approved'],
+    });
+    await runPollTick(baseConfig({ stages }), io);
+
+    expect(io.prompts).toHaveLength(1);
+    expect(io.prompts[0]).toContain('REVIEW');
+    expect(io.verdictQueries).toEqual([pr.number]);
+    expect(io.transitions).toEqual([
+      { itemNumber: pr.number, remove: 'harnext:review-loop', add: AWAITING_APPROVAL_LABEL },
+    ]);
+    expect(io.ticks.map((t) => t.stageId)).toEqual(['review-loop:review']);
+  });
+
+  it('changes_requested triggers fix, then approves on second review', async () => {
+    const pr = makePr();
+    const stages: StageEntry[] = [reviewLoop];
+    const io = makeIo({
+      items: [pr],
+      agentResults: [
+        { exit: 0, durationMs: 5, output: 'review-1' },
+        { exit: 0, durationMs: 5, output: 'fix-1' },
+        { exit: 0, durationMs: 5, output: 'review-2' },
+      ],
+      verdictResults: ['changes_requested', 'approved'],
+      // One refetch between iterations (after fix).
+      refetchResults: [makePr()],
+    });
+    await runPollTick(baseConfig({ stages }), io);
+
+    expect(io.prompts).toHaveLength(3);
+    expect(io.prompts[0]).toContain('REVIEW');
+    expect(io.prompts[1]).toContain('FIX');
+    expect(io.prompts[2]).toContain('REVIEW');
+    expect(io.verdictQueries).toEqual([pr.number, pr.number]);
+    expect(io.refetches).toEqual([pr.number]);
+    expect(io.ticks.map((t) => t.stageId)).toEqual([
+      'review-loop:review',
+      'review-loop:fix',
+      'review-loop:review',
+    ]);
+    expect(io.transitions).toEqual([
+      { itemNumber: pr.number, remove: 'harnext:review-loop', add: AWAITING_APPROVAL_LABEL },
+    ]);
+  });
+
+  it('exhausts maxIterations — parks on needs-judgment', async () => {
+    const pr = makePr();
+    const capped: ReviewLoopStage = { ...reviewLoop, maxIterations: 2 };
+    const stages: StageEntry[] = [capped];
+    const io = makeIo({
+      items: [pr],
+      agentResults: [
+        { exit: 0, durationMs: 5, output: 'review-1' },
+        { exit: 0, durationMs: 5, output: 'fix-1' },
+        { exit: 0, durationMs: 5, output: 'review-2' },
+      ],
+      verdictResults: ['changes_requested', 'changes_requested'],
+      refetchResults: [makePr()],
+    });
+    await runPollTick(baseConfig({ stages }), io);
+
+    expect(io.prompts).toHaveLength(3);
+    expect(io.ticks.map((t) => t.stageId)).toEqual([
+      'review-loop:review',
+      'review-loop:fix',
+      'review-loop:review',
+    ]);
+    expect(io.transitions).toEqual([
+      { itemNumber: pr.number, remove: 'harnext:review-loop', add: NJL },
+    ]);
+    expect(io.warnings.some((w) => w.includes('max iterations'))).toBe(true);
+  });
+
+  it('non-PR issue immediately parks on needs-judgment', async () => {
+    // Issue (no pull_request field) labeled with the review-loop entry label.
+    const issue = makeItem({
+      number: 77,
+      labels: [{ name: 'harnext:review-loop' }],
+    });
+    const stages: StageEntry[] = [reviewLoop];
+    const io = makeIo({
+      items: [issue],
+      agentResults: [],
+      verdictResults: [],
+    });
+    await runPollTick(baseConfig({ stages }), io);
+
+    expect(io.prompts).toHaveLength(0);
+    expect(io.verdictQueries).toEqual([]);
+    expect(io.transitions).toEqual([
+      { itemNumber: issue.number, remove: 'harnext:review-loop', add: NJL },
+    ]);
+  });
+
+  it('review agent non-zero exit parks on needs-judgment', async () => {
+    const pr = makePr();
+    const stages: StageEntry[] = [reviewLoop];
+    const io = makeIo({
+      items: [pr],
+      agentResults: [{ exit: 2, durationMs: 5, output: '', error: 'boom' }],
+      verdictResults: [],
+    });
+    await runPollTick(baseConfig({ stages }), io);
+
+    expect(io.prompts).toHaveLength(1);
+    expect(io.verdictQueries).toEqual([]);
+    expect(io.transitions).toEqual([
+      { itemNumber: pr.number, remove: 'harnext:review-loop', add: NJL },
+    ]);
+  });
+
+  it('yolo onExit advances to next stage after approval', async () => {
+    const pr = makePr({ labels: [{ name: 'harnext:review-loop' }] });
+    const yoloLoop: ReviewLoopStage = { ...reviewLoop, onExit: 'yolo' };
+    const nextStage: StageDefinition = {
+      id: 'after',
+      label: 'harnext:after',
+      prompt: 'after',
+      mode: 'human-approval',
+    };
+    const stages: StageEntry[] = [yoloLoop, nextStage];
+    const prWithNextLabel = makePr({ labels: [{ name: 'harnext:after' }] });
+    const io = makeIo({
+      items: [pr],
+      agentResults: [
+        { exit: 0, durationMs: 5, output: 'review' },
+        { exit: 0, durationMs: 5, output: 'after-ran' },
+      ],
+      verdictResults: ['approved'],
+      refetchResults: [prWithNextLabel],
+    });
+    await runPollTick(baseConfig({ stages }), io);
+
+    expect(io.prompts).toHaveLength(2);
+    expect(io.transitions).toEqual([
+      { itemNumber: pr.number, remove: 'harnext:review-loop', add: 'harnext:after' },
+      { itemNumber: pr.number, remove: 'harnext:after', add: AWAITING_APPROVAL_LABEL },
+    ]);
+    expect(io.ticks.map((t) => t.stageId)).toEqual(['review-loop:review', 'after']);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// PR handoff — detectOpenedPr + runPollTick normal-stage branch
+// ─────────────────────────────────────────────────────────────────────
+
+describe('runPollTick — PR handoff (issue → PR)', () => {
+  it('human-approval stage opens a PR: issue de-labeled, PR gets awaiting-approval', async () => {
+    const stages: StageDefinition[] = [
+      { id: 'implement', label: 'harnext:implement', prompt: 'implement', mode: 'human-approval' },
+    ];
+    const issue = makeItem({
+      number: 56,
+      labels: [{ name: 'harnext:implement' }],
+      updated_at: '2026-04-21T21:10:00Z',
+    });
+    const io = makeIo({
+      items: [issue],
+      agentResults: [{ exit: 0, durationMs: 100, output: 'opened PR' }],
+      detectOpenedPrResults: [{ number: 57, via: 'worktree-branch' }],
+    });
+
+    await runPollTick(baseConfig({ stages }), io);
+
+    expect(io.detectCalls).toHaveLength(1);
+    expect(io.detectCalls[0].issueNumber).toBe(56);
+    // First transition: park issue on awaiting-approval (remove stage, add AA).
+    // Second transition: add handoff label to PR.
+    expect(io.transitions).toEqual([
+      { itemNumber: 56, remove: 'harnext:implement', add: AWAITING_APPROVAL_LABEL },
+      { itemNumber: 57, remove: '', add: AWAITING_APPROVAL_LABEL },
+    ]);
+    // Two ticks: the stage tick + the synthetic handoff tick.
+    expect(io.ticks.map((t) => t.stageId)).toEqual(['implement', '(handoff-to-pr)']);
+    const handoffTick = io.ticks[1];
+    expect(handoffTick.itemNumber).toBe(57);
+    expect(handoffTick.itemKind).toBe('pr');
+    expect(handoffTick.output).toContain('handed off to PR #57');
+    expect(handoffTick.output).toContain('via worktree-branch');
+  });
+
+  it('yolo stage opens a PR: refetch rebinds next stage to the PR', async () => {
+    const stages: StageDefinition[] = [
+      { id: 'implement', label: 'harnext:implement', prompt: 'implement', mode: 'yolo' },
+      { id: 'verify', label: 'harnext:verify', prompt: 'verify', mode: 'yolo' },
+    ];
+    const issue = makeItem({
+      number: 56,
+      labels: [{ name: 'harnext:implement' }],
+    });
+    const prWithVerifyLabel = makeItem({
+      number: 57,
+      pull_request: { html_url: 'https://github.com/example/repo/pull/57' },
+      labels: [{ name: 'harnext:verify' }],
+    });
+    const io = makeIo({
+      items: [issue],
+      agentResults: [
+        { exit: 0, durationMs: 10, output: 'opened PR' },
+        { exit: 0, durationMs: 20, output: 'verified' },
+      ],
+      // First stage produces a PR; second stage runs on the refetched PR.
+      detectOpenedPrResults: [
+        { number: 57, via: 'issue-timeline' },
+        undefined,
+      ],
+      refetchResults: [prWithVerifyLabel],
+    });
+
+    await runPollTick(baseConfig({ stages }), io);
+
+    // Refetch target is the PR number, not the issue number.
+    expect(io.refetches).toEqual([57]);
+    // Second runAgent call sees the PR context.
+    expect(io.prompts[1]).toContain('Kind: pull request.');
+    expect(io.prompts[1]).toContain('Number: #57');
+    // Transitions:
+    //  1. park issue: remove implement label, add awaiting-approval
+    //  2. add verify label to PR
+    //  3. terminal yolo: remove verify from PR (no add)
+    expect(io.transitions).toEqual([
+      { itemNumber: 56, remove: 'harnext:implement', add: AWAITING_APPROVAL_LABEL },
+      { itemNumber: 57, remove: '', add: 'harnext:verify' },
+      { itemNumber: 57, remove: 'harnext:verify', add: undefined },
+    ]);
+    expect(io.ticks.map((t) => t.stageId)).toEqual([
+      'implement',
+      '(handoff-to-pr)',
+      'verify',
+    ]);
+  });
+
+  it('detector returns undefined: falls back to today\'s issue-only transition', async () => {
+    const stages: StageDefinition[] = [
+      { id: 'plan', label: 'harnext:plan', prompt: 'plan', mode: 'human-approval' },
+    ];
+    const issue = makeItem({ number: 42, labels: [{ name: 'harnext:plan' }] });
+    const io = makeIo({
+      items: [issue],
+      agentResults: [{ exit: 0, durationMs: 5, output: 'planned' }],
+      detectOpenedPrResults: [undefined],
+    });
+
+    await runPollTick(baseConfig({ stages }), io);
+
+    expect(io.detectCalls).toHaveLength(1);
+    // Today's behaviour: single combined remove+add on the issue.
+    expect(io.transitions).toEqual([
+      { itemNumber: 42, remove: 'harnext:plan', add: AWAITING_APPROVAL_LABEL },
+    ]);
+    expect(io.ticks.map((t) => t.stageId)).toEqual(['plan']);
+  });
+
+  it('when IO does not provide detectOpenedPr, legacy path is unchanged', async () => {
+    const stages: StageDefinition[] = [
+      { id: 'plan', label: 'harnext:plan', prompt: 'plan', mode: 'human-approval' },
+    ];
+    const issue = makeItem({ number: 43, labels: [{ name: 'harnext:plan' }] });
+    // No detectOpenedPrResults — IO does not expose detectOpenedPr at all.
+    const io = makeIo({
+      items: [issue],
+      agentResults: [{ exit: 0, durationMs: 5, output: 'planned' }],
+    });
+
+    await runPollTick(baseConfig({ stages }), io);
+
+    expect(io.detectCalls).toEqual([]);
+    expect(io.transitions).toEqual([
+      { itemNumber: 43, remove: 'harnext:plan', add: AWAITING_APPROVAL_LABEL },
+    ]);
+  });
+
+  it('detectOpenedPr is not called for PR items (review-loop handed off upstream)', async () => {
+    const stages: StageDefinition[] = [
+      { id: 'verify', label: 'harnext:verify', prompt: 'verify', mode: 'human-approval' },
+    ];
+    const pr = makeItem({
+      number: 200,
+      pull_request: { html_url: 'https://example/pr' },
+      labels: [{ name: 'harnext:verify' }],
+    });
+    const io = makeIo({
+      items: [pr],
+      agentResults: [{ exit: 0, durationMs: 5, output: 'verified' }],
+      // Queue is empty — if the poller called it we'd throw.
+      detectOpenedPrResults: [],
+    });
+
+    await runPollTick(baseConfig({ stages }), io);
+
+    expect(io.detectCalls).toEqual([]);
+    expect(io.transitions).toEqual([
+      { itemNumber: 200, remove: 'harnext:verify', add: AWAITING_APPROVAL_LABEL },
+    ]);
+  });
+
+  it('halts the chain when the PR handoff label-add fails', async () => {
+    const stages: StageDefinition[] = [
+      { id: 'implement', label: 'harnext:implement', prompt: 'implement', mode: 'human-approval' },
+    ];
+    const issue = makeItem({ number: 56, labels: [{ name: 'harnext:implement' }] });
+    const io = makeIo({
+      items: [issue],
+      agentResults: [{ exit: 0, durationMs: 5, output: 'opened PR' }],
+      detectOpenedPrResults: [{ number: 57, via: 'worktree-branch' }],
+      transitionFailOn: [
+        { itemNumber: 57, removeLabel: '', message: 'label harnext:awaiting-approval does not exist' },
+      ],
+    });
+
+    await runPollTick(baseConfig({ stages }), io);
+
+    // Issue parked on awaiting-approval; PR add failed.
+    expect(io.transitions).toEqual([
+      { itemNumber: 56, remove: 'harnext:implement', add: AWAITING_APPROVAL_LABEL },
+      { itemNumber: 57, remove: '', add: AWAITING_APPROVAL_LABEL },
+    ]);
+    expect(io.warnings.some((w) => w.includes('label add failed on PR #57'))).toBe(true);
+    // No handoff tick (we bailed before the synthetic tick write).
+    expect(io.ticks.map((t) => t.stageId)).toEqual(['implement']);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// detectOpenedPr unit tests — strategy precedence via runGh stub
+// ─────────────────────────────────────────────────────────────────────
+
+describe('detectOpenedPr', () => {
+  function makeGhStub(
+    responses: Record<string, GhResult<string>>,
+  ): { runGh: (args: string[]) => GhResult<string>; calls: string[][] } {
+    const calls: string[][] = [];
+    const runGh = (args: string[]): GhResult<string> => {
+      calls.push(args);
+      // Match the first response whose key is a substring of the joined args.
+      const joined = args.join(' ');
+      for (const [key, value] of Object.entries(responses)) {
+        if (joined.includes(key)) return value;
+      }
+      return { ok: false, message: `no stub response for: ${joined}`, exitCode: 1 };
+    };
+    return { runGh, calls };
+  }
+
+  it('strategy 1 (worktree branch) wins when pr list returns a PR', async () => {
+    const { runGh, calls } = makeGhStub({
+      'pr list': { ok: true, value: JSON.stringify([{ number: 57 }]) },
+    });
+    const result = await detectOpenedPr(
+      {
+        repo: 'example/repo',
+        issueNumber: 56,
+        worktreeBranch: 'issue/56-branding',
+        agentOutput: 'ignored',
+      },
+      { runGh },
+    );
+    expect(result).toEqual({ number: 57, via: 'worktree-branch' });
+    // Only one gh call — we did not fall through to strategy 2.
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain('--head');
+    expect(calls[0]).toContain('issue/56-branding');
+  });
+
+  it('strategy 2 (issue timeline) wins when strategy 1 returns empty', async () => {
+    const { runGh, calls } = makeGhStub({
+      'pr list': { ok: true, value: '[]' },
+      'timeline': { ok: true, value: '42\n' },
+    });
+    const result = await detectOpenedPr(
+      {
+        repo: 'example/repo',
+        issueNumber: 56,
+        worktreeBranch: 'some-branch',
+      },
+      { runGh },
+    );
+    expect(result).toEqual({ number: 42, via: 'issue-timeline' });
+    expect(calls).toHaveLength(2);
+  });
+
+  it('strategy 2 skips "null" output from jq and falls through when no cross-references', async () => {
+    const { runGh } = makeGhStub({
+      'pr list': { ok: true, value: '[]' },
+      'timeline': { ok: true, value: 'null\nnull\n' },
+    });
+    const result = await detectOpenedPr(
+      {
+        repo: 'example/repo',
+        issueNumber: 56,
+        worktreeBranch: 'some-branch',
+        agentOutput: 'https://github.com/example/repo/pull/99',
+      },
+      { runGh },
+    );
+    expect(result).toEqual({ number: 99, via: 'output-url' });
+  });
+
+  it('strategy 3 (output URL regex) picks up the last PR URL in the message', async () => {
+    const { runGh } = makeGhStub({
+      'pr list': { ok: false, message: 'rate limit', exitCode: 1 },
+      'timeline': { ok: false, message: 'rate limit', exitCode: 1 },
+    });
+    const result = await detectOpenedPr(
+      {
+        repo: 'example/repo',
+        issueNumber: 56,
+        worktreeBranch: 'some-branch',
+        agentOutput:
+          'Referenced https://github.com/example/repo/pull/5 earlier, then opened https://github.com/example/repo/pull/57 as draft.',
+      },
+      { runGh },
+    );
+    expect(result).toEqual({ number: 57, via: 'output-url' });
+  });
+
+  it('regex is case-insensitive for owner/repo segments', async () => {
+    const { runGh } = makeGhStub({
+      'pr list': { ok: false, message: 'fail', exitCode: 1 },
+      'timeline': { ok: false, message: 'fail', exitCode: 1 },
+    });
+    const result = await detectOpenedPr(
+      {
+        repo: 'ExampleOrg/Repo',
+        issueNumber: 1,
+        agentOutput: 'opened https://github.com/exampleorg/repo/pull/12',
+      },
+      { runGh },
+    );
+    expect(result?.number).toBe(12);
+  });
+
+  it('returns undefined when all three strategies fail', async () => {
+    const { runGh } = makeGhStub({
+      'pr list': { ok: true, value: '[]' },
+      'timeline': { ok: true, value: 'null\n' },
+    });
+    const result = await detectOpenedPr(
+      {
+        repo: 'example/repo',
+        issueNumber: 56,
+        worktreeBranch: 'some-branch',
+        agentOutput: 'no links here',
+      },
+      { runGh },
+    );
+    expect(result).toBeUndefined();
+  });
+
+  it('skips strategy 1 when worktreeBranch is absent', async () => {
+    const { runGh, calls } = makeGhStub({
+      'timeline': { ok: true, value: '99\n' },
+    });
+    const result = await detectOpenedPr(
+      {
+        repo: 'example/repo',
+        issueNumber: 56,
+      },
+      { runGh },
+    );
+    expect(result).toEqual({ number: 99, via: 'issue-timeline' });
+    // No `pr list` call.
+    expect(calls.every((args) => !args.includes('list'))).toBe(true);
+  });
+
+  it('across paginated jq output, takes the last non-null number', async () => {
+    const { runGh } = makeGhStub({
+      'pr list': { ok: true, value: '[]' },
+      // Simulate --paginate emitting once per page.
+      'timeline': { ok: true, value: '10\nnull\n57\n' },
+    });
+    const result = await detectOpenedPr(
+      {
+        repo: 'example/repo',
+        issueNumber: 56,
+        worktreeBranch: 'branch',
+      },
+      { runGh },
+    );
+    expect(result).toEqual({ number: 57, via: 'issue-timeline' });
   });
 });

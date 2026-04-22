@@ -45,6 +45,24 @@ export {
 } from './heartbeat.js';
 
 export {
+  CODING_AGENT_IDS,
+  CODING_AGENTS,
+  isCodingAgentId,
+  getCodingAgentSpec,
+  listCodingAgents,
+  type CodingAgentId,
+  type CodingAgentSpec,
+} from './coding-agents.js';
+
+export {
+  DEFAULT_EXTERNAL_AGENT_TIMEOUT_MS,
+  buildExternalAgentArgv,
+  runExternalCodingAgent,
+  type ExternalAgentSpawner,
+  type RunExternalCodingAgentOptions,
+} from './coding-agent-runner.js';
+
+export {
   GITHUB_CONFIG_FILE,
   GITHUB_POLL_INTERVAL_PRESETS,
   DEFAULT_STAGES,
@@ -66,7 +84,10 @@ export {
   type GithubConnectionConfig,
   type GithubPollIntervalMinutes,
   type GithubIssueFilter,
+  type NormalStage,
+  type ReviewLoopStage,
   type StageDefinition,
+  type StageEntry,
   type StageMode,
   type GhResult,
   type GhCommandOk,
@@ -86,11 +107,20 @@ export {
   getGithubRunsDir,
   fetchUpdatedIssues,
   detectStageForItem,
+  detectStageEntryForItem,
   passesFilter,
   isPullRequest,
   buildStagePrompt,
+  composeStagePrompt,
   transitionLabels,
   refetchItem,
+  fetchLatestReviewVerdict,
+  detectOpenedPr,
+  type DetectOpenedPrInput,
+  type DetectOpenedPrResult,
+  type DetectOpenedPrVia,
+  type DetectOpenedPrIO,
+  type ReviewVerdict,
   appendGithubPollTick,
   writeAgentRunLog,
   pruneAgentRunLogs,

@@ -166,6 +166,11 @@ export interface CronLineOptions {
   nodePath?: string;
   /** PATH value to inject so the tick can find user-installed binaries (e.g. `gh`). */
   path?: string;
+  /**
+   * SSH_AUTH_SOCK from the installing shell. Propagated so heartbeats that
+   * shell out to git over SSH can authenticate without a TTY.
+   */
+  sshAuthSock?: string;
 }
 
 /**
@@ -176,9 +181,12 @@ export function buildCronLine(opts: CronLineOptions): string {
   const node = opts.nodePath ?? 'node';
   const logPath = getHeartbeatPaths(opts.cwd, opts.name).log;
   const pathPrefix = opts.path ? `PATH=${shellQuote(opts.path)} ` : '';
+  const sshPrefix = opts.sshAuthSock
+    ? `SSH_AUTH_SOCK=${shellQuote(opts.sshAuthSock)} `
+    : '';
   const cmd =
     `cd ${shellQuote(opts.cwd)} && ` +
-    `${pathPrefix}${shellQuote(node)} ${shellQuote(opts.cliPath)} --heartbeat ${shellQuote(opts.name)} ` +
+    `${pathPrefix}${sshPrefix}${shellQuote(node)} ${shellQuote(opts.cliPath)} --heartbeat ${shellQuote(opts.name)} ` +
     `>> ${shellQuote(logPath)} 2>&1`;
   return `${opts.schedule} ${cmd} # ${opts.tag}`;
 }

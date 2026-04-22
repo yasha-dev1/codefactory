@@ -9,6 +9,7 @@ import type { ThinkingLevel } from '@mariozechner/pi-agent-core';
 import chalk from 'chalk';
 
 import { parseArgs } from './cli/args.js';
+import { runConnectGithubCommand } from './cli/github-prompt.js';
 import { ensureAuth } from './cli/onboarding.js';
 import {
   appendGithubPollTick,
@@ -25,6 +26,7 @@ import {
   runInteractiveMode,
   runMcpMode,
   runPrintMode,
+  runStatusMode,
 } from './modes/index.js';
 
 const FALLBACK_PROVIDER = 'anthropic';
@@ -61,6 +63,21 @@ export async function main(argv: string[]): Promise<void> {
   if (args.mode === 'mcp') {
     const exitCode = await runMcpMode(args);
     process.exit(exitCode);
+  }
+
+  if (args.mode === 'status') {
+    const exitCode = await runStatusMode({ cwd: args.cwd });
+    process.exit(exitCode);
+  }
+
+  if (args.mode === 'setup') {
+    await runConnectGithubCommand({
+      cwd: args.cwd,
+      cliPath: process.argv[1] ?? '',
+      nodePath: process.execPath,
+      setupMode: 'full',
+    });
+    process.exit(0);
   }
 
   // Resolve provider/model: CLI flags > saved preferences > provider's built-in default > fallback.
@@ -178,6 +195,8 @@ async function runGithubPoll(cwd: string, thinkingLevel: ThinkingLevel): Promise
     return 1;
   }
 
+  // Only the in-process harnext agent needs provider/model resolution —
+  // external coding agents pick up their own model from config.codingAgentModel.
   const prefs = loadPreferences();
   const resolvedProvider = prefs.defaultProvider ?? FALLBACK_PROVIDER;
   const resolvedModel =
@@ -189,11 +208,14 @@ async function runGithubPoll(cwd: string, thinkingLevel: ThinkingLevel): Promise
     return await runGithubPollMode({
       cwd,
       config,
-      session: {
-        provider: resolvedProvider,
-        modelId: resolvedModel,
-        thinkingLevel,
-      },
+      session:
+        config.codingAgent === 'harnext'
+          ? {
+              provider: resolvedProvider,
+              modelId: resolvedModel,
+              thinkingLevel,
+            }
+          : undefined,
     });
   } catch (err) {
     appendGithubPollTick(cwd, {

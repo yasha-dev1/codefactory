@@ -8,6 +8,7 @@ import {
 import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 
+import { isCodingAgentId, type CodingAgentId } from './coding-agents.js';
 import { getProjectStateDir } from './config.js';
 import { HEARTBEAT_INTERVAL_PRESETS, type HeartbeatIntervalMinutes } from './heartbeat.js';
 
@@ -36,7 +37,13 @@ export type GithubIssueFilter =
  */
 export type StageMode = 'yolo' | 'human-approval';
 
-export interface StageDefinition {
+/**
+ * A plain single-run stage — the traditional shape. `kind` is optional so
+ * configs written before the union existed (no `kind` field) round-trip as
+ * normal stages without any migration step.
+ */
+export interface NormalStage {
+  kind?: 'normal';
   /** Stable identifier, e.g. 'triage'. Used in logs and reorder UI. */
   id: string;
   /** Label string as it appears on GitHub, e.g. 'harnext:triage'. */
@@ -47,6 +54,41 @@ export interface StageDefinition {
   mode: StageMode;
 }
 
+/**
+ * A review ↔ fix loop. On entry the poller runs the `review` agent, parses
+ * the latest PR review verdict, and — if `changes_requested` — runs `fix`
+ * and loops. Terminates when the verdict is `approved` or `commented`, or
+ * when `maxIterations` is exhausted (in which case the item is parked on
+ * `needs-judgment`). All iteration state lives only within a single tick;
+ * no per-iteration GitHub labels are created.
+ */
+export interface ReviewLoopStage {
+  kind: 'review-loop';
+  /** Stable identifier used in logs. */
+  id: string;
+  /** Entry label on GitHub, e.g. 'harnext:review-loop'. */
+  label: string;
+  /** Upper bound on review runs within one tick. */
+  maxIterations: number;
+  /** Prompt for the reviewer agent (runs first; produces the verdict). */
+  review: { prompt: string };
+  /** Prompt for the fixer agent (runs when the verdict is changes_requested). */
+  fix: { prompt: string };
+  /**
+   * Handoff mode after a terminating verdict — yolo chains to the next
+   * entry, human-approval parks on `awaiting-approval`.
+   */
+  onExit: StageMode;
+}
+
+export type StageEntry = NormalStage | ReviewLoopStage;
+
+/**
+ * Back-compat alias: existing call sites referring to `StageDefinition`
+ * continue to work. New code should prefer `NormalStage` or `StageEntry`.
+ */
+export type StageDefinition = NormalStage;
+
 export interface GithubConnectionConfig {
   /** GitHub repository in "owner/name" form. */
   repo: string;
@@ -56,15 +98,28 @@ export interface GithubConnectionConfig {
   filter: GithubIssueFilter;
   /**
    * Ordered list of workflow stages. The poller treats `stages[i+1]` as the
-   * "next" stage for YOLO chaining, so order matters.
+   * "next" stage for YOLO chaining, so order matters. Entries are a union of
+   * `NormalStage` (the traditional single-run stage) and `ReviewLoopStage`
+   * (a review ↔ fix loop with verdict-driven termination).
    */
-  stages: StageDefinition[];
+  stages: StageEntry[];
   /**
    * Pointer for incremental polling (ISO 8601). First tick writes `now()`.
    * Advanced per-item even on agent failure so a broken issue does not block
    * the queue.
    */
   lastSeenUpdatedAt?: string;
+  /**
+   * Which coding agent runs the pipeline for this project. Defaults to
+   * `harnext` for configs written before this field existed.
+   */
+  codingAgent: CodingAgentId;
+  /**
+   * Model id passed to the coding agent's CLI via its native model flag.
+   * Only set when `codingAgent !== 'harnext'` — harnext resolves its model
+   * from user-level preferences via the provider registry.
+   */
+  codingAgentModel?: string;
   /** Epoch ms when the config was last written. */
   updatedAt: number;
 }
@@ -74,8 +129,9 @@ export const AWAITING_APPROVAL_LABEL = 'harnext:awaiting-approval';
 /** Label added by the poller when it cannot make progress on an item. */
 export const NEEDS_JUDGMENT_LABEL = 'harnext:needs-judgment';
 
-export const DEFAULT_STAGES: StageDefinition[] = [
+export const DEFAULT_STAGES: StageEntry[] = [
   {
+    kind: 'normal',
     id: 'triage',
     label: 'harnext:triage',
     mode: 'yolo',
@@ -92,6 +148,7 @@ export const DEFAULT_STAGES: StageDefinition[] = [
     ].join('\n'),
   },
   {
+    kind: 'normal',
     id: 'plan',
     label: 'harnext:plan',
     mode: 'human-approval',
@@ -112,6 +169,7 @@ export const DEFAULT_STAGES: StageDefinition[] = [
     ].join('\n'),
   },
   {
+    kind: 'normal',
     id: 'implement',
     label: 'harnext:implement',
     mode: 'human-approval',
@@ -127,6 +185,7 @@ export const DEFAULT_STAGES: StageDefinition[] = [
     ].join('\n'),
   },
   {
+    kind: 'normal',
     id: 'verify',
     label: 'harnext:verify',
     mode: 'yolo',
@@ -141,17 +200,37 @@ export const DEFAULT_STAGES: StageDefinition[] = [
     ].join('\n'),
   },
   {
+    kind: 'review-loop',
     id: 'review',
     label: 'harnext:review',
-    mode: 'human-approval',
-    prompt: [
-      'Stage: review.',
-      '',
-      'Review this pull request as a senior engineer would. Focus on:',
-      'correctness, edge cases, test coverage, error handling, and obvious',
-      'security concerns. Post a single PR review (approve, request changes,',
-      'or comment). Do not merge.',
-    ].join('\n'),
+    maxIterations: 3,
+    review: {
+      prompt: [
+        'Stage: review (reviewer pass).',
+        '',
+        'Review this pull request as a senior engineer would. Focus on:',
+        'correctness, edge cases, test coverage, error handling, and obvious',
+        'security concerns. Post a single PR review with an explicit verdict:',
+        'approve, request changes, or comment. Do not merge.',
+        '',
+        'If the PR is good as-is, approve it. If there are issues, request',
+        'changes and list them as review comments on the relevant lines.',
+      ].join('\n'),
+    },
+    fix: {
+      prompt: [
+        'Stage: review (fix pass).',
+        '',
+        'The most recent PR review requested changes. Read the review body and',
+        'any line-level comments, then address each item: edit the code on the',
+        'PR branch, commit with a clear message, and push. Do not open a new',
+        'PR. Do not resolve review threads yourself — the reviewer will do',
+        'that on the next pass.',
+        '',
+        'Keep the scope tight: only fix what the review asked for.',
+      ].join('\n'),
+    },
+    onExit: 'human-approval',
   },
 ];
 
@@ -159,15 +238,50 @@ export function getGithubConfigPath(cwd: string): string {
   return join(getProjectStateDir(cwd), GITHUB_CONFIG_FILE);
 }
 
-function isValidStage(x: unknown): x is StageDefinition {
+function isValidNormalStageShape(x: Record<string, unknown>): boolean {
+  return (
+    typeof x.id === 'string' &&
+    typeof x.label === 'string' &&
+    typeof x.prompt === 'string' &&
+    (x.mode === 'yolo' || x.mode === 'human-approval')
+  );
+}
+
+function isValidReviewLoopStageShape(x: Record<string, unknown>): boolean {
+  const review = x.review as Record<string, unknown> | undefined;
+  const fix = x.fix as Record<string, unknown> | undefined;
+  return (
+    typeof x.id === 'string' &&
+    typeof x.label === 'string' &&
+    typeof x.maxIterations === 'number' &&
+    x.maxIterations >= 1 &&
+    (x.onExit === 'yolo' || x.onExit === 'human-approval') &&
+    !!review &&
+    typeof review.prompt === 'string' &&
+    !!fix &&
+    typeof fix.prompt === 'string'
+  );
+}
+
+function isValidStageEntry(x: unknown): x is StageEntry {
   if (!x || typeof x !== 'object') return false;
   const s = x as Record<string, unknown>;
-  return (
-    typeof s.id === 'string' &&
-    typeof s.label === 'string' &&
-    typeof s.prompt === 'string' &&
-    (s.mode === 'yolo' || s.mode === 'human-approval')
-  );
+  // `kind` absent or 'normal' → validate as a NormalStage (back-compat for
+  // pre-union configs). 'review-loop' → validate the loop shape. Any other
+  // explicit kind is rejected.
+  if (s.kind === 'review-loop') return isValidReviewLoopStageShape(s);
+  if (s.kind === undefined || s.kind === 'normal') return isValidNormalStageShape(s);
+  return false;
+}
+
+/**
+ * Normalize a validated stage entry before handing it to callers — fills in
+ * `kind: 'normal'` on pre-union configs so downstream code can always rely on
+ * the discriminator being present.
+ */
+function normalizeStageEntry(s: StageEntry): StageEntry {
+  if (s.kind === 'review-loop') return s;
+  return { ...s, kind: 'normal' };
 }
 
 export function loadGithubConnection(cwd: string): GithubConnectionConfig | null {
@@ -186,10 +300,19 @@ export function loadGithubConnection(cwd: string): GithubConnectionConfig | null
 
     // Backfill: configs written before the stages field existed default to
     // DEFAULT_STAGES so existing setups keep working without manual editing.
+    // Also normalizes each entry so the `kind` discriminator is always set.
     const stages =
-      Array.isArray(parsed.stages) && parsed.stages.every(isValidStage)
-        ? (parsed.stages as StageDefinition[])
+      Array.isArray(parsed.stages) && parsed.stages.every(isValidStageEntry)
+        ? (parsed.stages as StageEntry[]).map(normalizeStageEntry)
         : DEFAULT_STAGES;
+
+    const codingAgent: CodingAgentId = isCodingAgentId(parsed.codingAgent)
+      ? parsed.codingAgent
+      : 'harnext';
+    const codingAgentModel =
+      codingAgent !== 'harnext' && typeof parsed.codingAgentModel === 'string'
+        ? parsed.codingAgentModel
+        : undefined;
 
     return {
       repo: parsed.repo,
@@ -199,6 +322,8 @@ export function loadGithubConnection(cwd: string): GithubConnectionConfig | null
       lastSeenUpdatedAt: typeof parsed.lastSeenUpdatedAt === 'string'
         ? parsed.lastSeenUpdatedAt
         : undefined,
+      codingAgent,
+      codingAgentModel,
       updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : Date.now(),
     };
   } catch {
@@ -350,7 +475,7 @@ const LABEL_DESCRIPTION = 'Managed by harnext — controls the issue/PR pipeline
  * Build the set of labels harnext needs on the repo for a given stage list.
  * Ordering mirrors the pipeline: stage labels, then the shared control labels.
  */
-export function buildHarnextLabelSpecs(stages: StageDefinition[]): HarnextLabelSpec[] {
+export function buildHarnextLabelSpecs(stages: StageEntry[]): HarnextLabelSpec[] {
   // Distinct-ish colors per stage position so the timeline is readable at a glance.
   const palette = ['0e8a16', '0366d6', 'a2eeef', 'd4c5f9', 'fbca04', 'c5def5', '7057ff'];
   const specs: HarnextLabelSpec[] = stages.map((stage, idx) => ({

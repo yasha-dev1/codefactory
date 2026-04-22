@@ -232,6 +232,7 @@ async function installFlow(
     tag,
     nodePath: opts.nodePath,
     path: process.env.PATH,
+    sshAuthSock: process.env.SSH_AUTH_SOCK,
   });
 
   console.log();
