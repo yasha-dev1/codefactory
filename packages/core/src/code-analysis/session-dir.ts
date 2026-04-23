@@ -13,8 +13,19 @@
  *   - the user can inspect a retained session after a failure,
  *   - debugging workflows don't require a system tmpdir crawl.
  *
- * A `.gitignore` entry for `analysis-runs/` is appended-if-missing to
- * `<cwd>/.harnext/.gitignore` so these dirs never get committed.
+ * `.gitignore` entries are appended-if-missing to `<cwd>/.harnext/.gitignore`
+ * so these derived artifacts never get committed:
+ *   - `analysis-runs/` — per-run scratch dirs (retained on failure for
+ *     debugging; cleaned on success).
+ *   - `tech-stack.json` — durable cache of the code-analysis pipeline's
+ *     tech-stack inventory. Only read by the wizard's "reuse existing
+ *     analysis" branch; regenerated on demand. Committing it means
+ *     teammates reuse a stale map that drifts from reality.
+ *
+ * `contract.json` and `scripts/*.sh` are intentionally NOT in the
+ * ignore list — they're consumed by CI (the generated
+ * `risk-policy-gate.sh` reads `contract.json`; every check script is
+ * invoked from CI) and must be committed.
  */
 
 import { randomBytes } from 'node:crypto';
@@ -25,7 +36,13 @@ import { CONFIG_DIR_NAME } from '../config.js';
 
 const SESSION_SUBDIR = 'analysis-runs';
 const KEEP_ENV_VAR = 'HARNEXT_KEEP_ANALYSIS_DIR';
-const GITIGNORE_ENTRY = `${SESSION_SUBDIR}/`;
+/**
+ * Derived artifacts the wizard writes under `.harnext/` that should
+ * never be committed. Keep this list tight — every entry is a
+ * deliberate "this is regenerated and committing it causes drift"
+ * call, not a catch-all. Trailing slash marks a directory.
+ */
+const GITIGNORE_ENTRIES: readonly string[] = [`${SESSION_SUBDIR}/`, 'tech-stack.json'];
 
 export interface ManifestEntry {
   stage: string;
@@ -137,25 +154,43 @@ export function createSessionDir(cwd: string): SessionDir {
 }
 
 /**
- * Appends `analysis-runs/` to `.harnext/.gitignore` if it isn't already
- * present. Creates the `.gitignore` when missing. Never clobbers existing
- * lines (important — `.harnext/` may accumulate user-authored ignores).
+ * Ensures every entry in `GITIGNORE_ENTRIES` is present in
+ * `.harnext/.gitignore`. Creates the file when missing; only appends
+ * entries that aren't already there so existing user-authored ignores
+ * survive (important — `.harnext/` may accumulate handwritten lines
+ * across re-runs). For each entry we also accept its non-trailing-slash
+ * twin (e.g. `analysis-runs` vs `analysis-runs/`) as already-present
+ * so we don't emit a second line that means the same thing.
  */
 function ensureGitignore(cwd: string): void {
   const gitignorePath = join(cwd, CONFIG_DIR_NAME, '.gitignore');
   mkdirSync(dirname(gitignorePath), { recursive: true });
-  if (!existsSync(gitignorePath)) {
-    writeFileSync(gitignorePath, `${GITIGNORE_ENTRY}\n`, 'utf-8');
+
+  let existing = '';
+  if (existsSync(gitignorePath)) {
+    try {
+      existing = readFileSync(gitignorePath, 'utf-8');
+    } catch {
+      return;
+    }
+  }
+  const existingLines = new Set(
+    existing.split('\n').map((l) => l.trim()).filter((l) => l.length > 0),
+  );
+
+  const toAppend: string[] = [];
+  for (const entry of GITIGNORE_ENTRIES) {
+    const twin = entry.endsWith('/') ? entry.slice(0, -1) : `${entry}/`;
+    if (existingLines.has(entry) || existingLines.has(twin)) continue;
+    toAppend.push(entry);
+    existingLines.add(entry);
+  }
+  if (toAppend.length === 0) return;
+
+  if (existing.length === 0) {
+    writeFileSync(gitignorePath, toAppend.join('\n') + '\n', 'utf-8');
     return;
   }
-  let existing: string;
-  try {
-    existing = readFileSync(gitignorePath, 'utf-8');
-  } catch {
-    return;
-  }
-  const lines = existing.split('\n').map((l) => l.trim());
-  if (lines.includes(GITIGNORE_ENTRY) || lines.includes(SESSION_SUBDIR)) return;
-  const prefix = existing.endsWith('\n') || existing.length === 0 ? '' : '\n';
-  appendFileSync(gitignorePath, `${prefix}${GITIGNORE_ENTRY}\n`, 'utf-8');
+  const prefix = existing.endsWith('\n') ? '' : '\n';
+  appendFileSync(gitignorePath, `${prefix}${toAppend.join('\n')}\n`, 'utf-8');
 }

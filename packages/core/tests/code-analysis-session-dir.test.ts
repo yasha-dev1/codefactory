@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -75,21 +75,40 @@ describe('createSessionDir', () => {
     }
   });
 
-  it('ensures .harnext/.gitignore contains analysis-runs/ (append-if-missing)', () => {
+  it('ensures .harnext/.gitignore contains analysis-runs/ and tech-stack.json (append-if-missing)', () => {
+    // tech-stack.json is a local cache of the code-analysis pipeline's
+    // output — only the wizard's "reuse existing analysis" branch reads
+    // it, and it drifts from reality the moment someone reshuffles the
+    // repo. It belongs next to analysis-runs/ in the ignore list.
     createSessionDir(cwd);
-    const gitignorePath = join(cwd, '.harnext', '.gitignore');
-    expect(readFileSync(gitignorePath, 'utf-8')).toContain('analysis-runs/');
+    const contents = readFileSync(join(cwd, '.harnext', '.gitignore'), 'utf-8');
+    expect(contents).toContain('analysis-runs/');
+    expect(contents).toContain('tech-stack.json');
   });
 
-  it('does not duplicate the gitignore entry on re-run', () => {
+  it('does not duplicate gitignore entries on re-run', () => {
     createSessionDir(cwd);
     createSessionDir(cwd);
     const contents = readFileSync(join(cwd, '.harnext', '.gitignore'), 'utf-8');
-    const matches = contents.match(/analysis-runs\//g) ?? [];
-    expect(matches.length).toBe(1);
+    expect((contents.match(/analysis-runs\//g) ?? []).length).toBe(1);
+    expect((contents.match(/tech-stack\.json/g) ?? []).length).toBe(1);
   });
 
-  it('preserves pre-existing gitignore lines when adding analysis-runs/', () => {
+  it('treats a non-trailing-slash twin as already-present (no duplicate lines)', () => {
+    // A user who hand-wrote `analysis-runs` (without the trailing
+    // slash) should not end up with both `analysis-runs` and
+    // `analysis-runs/` in their gitignore.
+    const gitignorePath = join(cwd, '.harnext', '.gitignore');
+    mkdirSync(join(cwd, '.harnext'), { recursive: true });
+    writeFileSync(gitignorePath, 'analysis-runs\n', 'utf-8');
+    createSessionDir(cwd);
+    const contents = readFileSync(gitignorePath, 'utf-8');
+    expect((contents.match(/analysis-runs/g) ?? []).length).toBe(1);
+    // tech-stack.json still gets appended — it was not previously listed.
+    expect(contents).toContain('tech-stack.json');
+  });
+
+  it('preserves pre-existing gitignore lines when appending managed entries', () => {
     // Seed .harnext/.gitignore with an existing line, then run the session
     // and verify the session dir appended without touching the first line.
     createSessionDir(cwd); // seeds the .harnext dir + gitignore
@@ -98,6 +117,19 @@ describe('createSessionDir', () => {
     createSessionDir(cwd);
     const contents = readFileSync(gitignorePath, 'utf-8');
     expect(contents).toContain('custom-line');
+    expect(contents).toContain('analysis-runs/');
+    expect(contents).toContain('tech-stack.json');
+  });
+
+  it('only appends entries that are actually missing', () => {
+    // When tech-stack.json is already listed by hand but analysis-runs/
+    // is not, ensureGitignore appends only analysis-runs/.
+    const gitignorePath = join(cwd, '.harnext', '.gitignore');
+    mkdirSync(join(cwd, '.harnext'), { recursive: true });
+    writeFileSync(gitignorePath, 'tech-stack.json\n', 'utf-8');
+    createSessionDir(cwd);
+    const contents = readFileSync(gitignorePath, 'utf-8');
+    expect((contents.match(/tech-stack\.json/g) ?? []).length).toBe(1);
     expect(contents).toContain('analysis-runs/');
   });
 });
