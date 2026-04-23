@@ -17,7 +17,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 
 import type { CodingAgentId } from '../../coding-agents.js';
 import type { ExternalAgentSpawner } from '../../coding-agent-runner.js';
-import { runCodingAgent } from '../run-coding-agent.js';
+import { CODE_ANALYSIS_MAX_TURNS, runCodingAgent } from '../run-coding-agent.js';
 import { loadPrompt, renderPrompt } from '../prompt-loader.js';
 import {
   coerceRiskContract,
@@ -84,6 +84,7 @@ export async function runRiskContractStage(
     codingAgent: opts.codingAgent,
     codingAgentModel: opts.codingAgentModel,
     prompt,
+    maxTurns: CODE_ANALYSIS_MAX_TURNS,
     spawner: opts.spawner,
     runHarnextAgent: opts.runHarnextAgent,
     onActivity: opts.onActivity,

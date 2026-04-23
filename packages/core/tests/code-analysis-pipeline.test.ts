@@ -193,7 +193,7 @@ describe('runCodeAnalysisPipeline', () => {
           );
           const base = match ? match[1] : '';
           if (!base) return;
-          for (const slug of ['codebase-conventions', 'run-checks', 'verify-implementation']) {
+          for (const slug of ['init']) {
             const dir = join(base, slug);
             mkdirSync(dir, { recursive: true });
             writeFileSync(
@@ -225,9 +225,7 @@ describe('runCodeAnalysisPipeline', () => {
       'ci-pipeline.sh',
       'risk-policy-gate.sh',
     ]);
-    expect(result.skillsGenerated).toEqual(
-      expect.arrayContaining(['codebase-conventions', 'run-checks', 'verify-implementation']),
-    );
+    expect(result.skillsGenerated).toEqual(expect.arrayContaining(['init']));
     // No errors → session dir cleaned.
     expect(result.sessionDir).toBe('');
   });

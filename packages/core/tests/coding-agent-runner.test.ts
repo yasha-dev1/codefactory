@@ -78,6 +78,47 @@ describe('buildExternalAgentArgv', () => {
   it('throws for harnext (no external binary)', () => {
     expect(() => buildExternalAgentArgv(getCodingAgentSpec('harnext'), 'hi', 'm')).toThrow();
   });
+
+  it('appends --max-turns to claude-code argv when maxTurns is provided', () => {
+    const spec = getCodingAgentSpec('claude-code');
+    const argv = buildExternalAgentArgv(spec, 'hello', 'claude-sonnet-4-6', {
+      maxTurns: 150,
+    });
+    expect(argv.args).toEqual([
+      '-p',
+      'hello',
+      '--model',
+      'claude-sonnet-4-6',
+      '--max-turns',
+      '150',
+      '--dangerously-skip-permissions',
+    ]);
+  });
+
+  it('drops invalid maxTurns values silently (zero, NaN, negative, non-integer)', () => {
+    // A bad maxTurns value must not break the spawn. Guarding it here
+    // (rather than throwing) means a misconfigured caller still gets a
+    // working claude-code run with the agent's default budget.
+    const spec = getCodingAgentSpec('claude-code');
+    for (const bad of [0, -1, Number.NaN, 1.5]) {
+      const argv = buildExternalAgentArgv(spec, 'hi', 'm', { maxTurns: bad });
+      expect(argv.args).not.toContain('--max-turns');
+    }
+  });
+
+  it('ignores maxTurns for codex (no equivalent flag)', () => {
+    const spec = getCodingAgentSpec('codex');
+    const argv = buildExternalAgentArgv(spec, 'hello', 'gpt-5.4', { maxTurns: 150 });
+    // Codex argv stays exactly as before — no --max-turns, no silent
+    // injection of a claude-style flag.
+    expect(argv.args).toEqual([
+      'exec',
+      '--model',
+      'gpt-5.4',
+      '--dangerously-bypass-approvals-and-sandbox',
+      'hello',
+    ]);
+  });
 });
 
 describe('runExternalCodingAgent', () => {

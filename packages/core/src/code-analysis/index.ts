@@ -78,6 +78,7 @@ export {
 } from './stages/stage-prompts.js';
 
 export {
+  CODE_ANALYSIS_MAX_TURNS,
   runCodingAgent,
   type RunCodingAgentOptions,
   type RunCodingAgentResult,

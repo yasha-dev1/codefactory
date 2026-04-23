@@ -17,25 +17,28 @@ import { join } from 'node:path';
 
 import type { CodingAgentId } from '../../coding-agents.js';
 import type { ExternalAgentSpawner } from '../../coding-agent-runner.js';
-import { runCodingAgent } from '../run-coding-agent.js';
+import { CODE_ANALYSIS_MAX_TURNS, runCodingAgent } from '../run-coding-agent.js';
 import { resolveAgentSkillsDir } from './install-bundled-skills.js';
 import { loadPrompt, renderPrompt } from '../prompt-loader.js';
 import type { SessionDir } from '../session-dir.js';
 import type { TechStack } from '../types.js';
 
-export const DEFAULT_GENERATED_SKILL_SLUGS = [
-  'codebase-conventions',
-  'run-checks',
-  'verify-implementation',
-];
+export const DEFAULT_GENERATED_SKILL_SLUGS = ['init'];
 
 const SLUG_DESCRIPTIONS: Record<string, string> = {
-  'codebase-conventions':
-    "Document the repo's naming, import, formatting, and error-handling rules so the agent follows them when editing code.",
-  'run-checks':
-    'Document the exact commands for tests, lint, typecheck, and build — and when to run each one (pre-commit vs. pre-PR).',
-  'verify-implementation':
-    "Document how to verify a change actually works end-to-end, referencing the TechStack's real test/lint/typecheck/build commands. When any package has hasUI=true, also document driving a real browser — prefer the bundled `browser-verify` skill (produces video + Playwright trace + a11y snapshots), or fall back to `chrome-devtools` MCP tools if configured. Skip browser work when the PR doesn't touch a UI path.",
+  init: [
+    "Project-specific startup + repository tour. Must be grounded in a deep read of the repo — NOT just a launch-commands cheatsheet.",
+    'Before writing anything, investigate the repo by reading its actual files:',
+    '  (a) Find every manifest at the root and inside each package directory — package.json, yarn.lock/pnpm-workspace.yaml, pyproject.toml/poetry.lock, requirements.txt, composer.json, go.mod, Cargo.toml, Gemfile, build.gradle, pom.xml, Makefile, Dockerfile, docker-compose*.yml — and read each one end-to-end. The manifest is authoritative for install/build/test commands; copy them verbatim, never paraphrase.',
+    '  (b) Walk the actual source tree of every runnable app (not pure libraries). For backend apps, locate where the HTTP framework mounts routes (FastAPI `APIRouter`, Express `app.use`/`router`, Django `urls.py`, Rails `routes.rb`, Flask blueprints, NestJS controllers, Laravel `routes/*.php`, Go chi/gin router files) and list the top-level route groups by path + source file. For frontend apps, locate the routing entry (Next.js `app/`/`pages/`, React Router config, Vue Router, SvelteKit `routes/`) and list the top-level routes + their file paths.',
+    '  (c) Read any `scripts/`, `bin/`, `Makefile`, or CI workflow files (`.github/workflows/*.yml`, `.gitlab-ci.yml`, `circle.yml`) — they usually reveal canonical install/build/test/start sequences the manifests alone do not spell out.',
+    '  (d) Note the env vars referenced in code (grep for `process.env.`, `os.environ`, `getenv(`, `ENV[`) and cross-check against `.env.example` / `.env.sample` / `config/` — the skill should list every env var the app needs to boot, not only what is in `.env.example`.',
+    'Write the skill as a repository tour + runbook:',
+    "  - Top section: a 3–6 line overview naming each runnable app, its language/framework, its port if statically configured, and a one-line description (what it does — not just 'the frontend').",
+    '  - One subsection per runnable app with (in order): source path, install command, start-in-background command (detached via `nohup <cmd> >> .harnext/logs/<app>.log 2>&1 &` so the agent bash call returns immediately), tail command (`tail -n 200 .harnext/logs/<app>.log` — never `tail -f` from an agent), stop command, env vars required to boot (with source file paths), key endpoints or entry routes grouped by prefix (with source file paths), and any known boot-order dependencies (databases, caches, message queues — reference the docker-compose service names if present).',
+    "  - For monorepos, cover every runnable package — miss none. 'Runnable' = has a dev/start/run target in its manifest OR a Dockerfile with a CMD/ENTRYPOINT. Skip pure libraries (note them briefly under the overview only).",
+    'Never guess a command. If the repo does not specify it, omit that field and note the omission in a short "Unknown — confirm with the team" note rather than inventing one.',
+  ].join('\n'),
 };
 
 export interface RunProjectSkillsStageOptions {
@@ -115,6 +118,7 @@ export async function runProjectSkillsStage(
     codingAgent: opts.codingAgent,
     codingAgentModel: opts.codingAgentModel,
     prompt,
+    maxTurns: CODE_ANALYSIS_MAX_TURNS,
     spawner: opts.spawner,
     runHarnextAgent: opts.runHarnextAgent,
     onActivity: opts.onActivity,

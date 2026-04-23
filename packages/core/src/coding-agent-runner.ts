@@ -23,6 +23,15 @@ export interface RunExternalCodingAgentOptions {
    * agents — the setup wizard guarantees a value when codingAgent !== 'harnext'.
    */
   modelId: string;
+  /**
+   * Optional upper bound on the agent's turn count. Forwarded to
+   * `claude-code` as `--max-turns <N>`; ignored by agents without an
+   * equivalent flag (codex). Setup-time callers (code analysis,
+   * workflow generation) should pass a high value so the agent can
+   * research the repo thoroughly; runtime pipeline stages should leave
+   * it undefined and trust the agent's default.
+   */
+  maxTurns?: number;
   /** Defaults to {@link DEFAULT_EXTERNAL_AGENT_TIMEOUT_MS}. */
   timeoutMs?: number;
   /** Override for tests. Defaults to node:child_process `spawn`. */
@@ -49,24 +58,41 @@ export type ExternalAgentSpawner = (
   options: { cwd: string; env: NodeJS.ProcessEnv },
 ) => ChildProcessWithoutNullStreams;
 
+export interface BuildExternalAgentArgvOptions {
+  /**
+   * Upper bound on the agent's turn count. Appended to claude-code as
+   * `--max-turns <N>`; ignored for agents without a matching flag.
+   * Must be a finite positive integer or it's silently dropped so
+   * bad inputs don't fail the whole spawn.
+   */
+  maxTurns?: number;
+}
+
 /** Build the argv for a given external agent. Exported so tests can assert on it. */
 export function buildExternalAgentArgv(
   spec: CodingAgentSpec,
   prompt: string,
   modelId: string,
+  options: BuildExternalAgentArgvOptions = {},
 ): { binary: string; args: string[] } {
   if (!spec.binary || !spec.modelFlag) {
     throw new Error(`agent "${spec.id}" is not an external CLI agent`);
   }
+  const maxTurns =
+    Number.isInteger(options.maxTurns) && (options.maxTurns as number) > 0
+      ? (options.maxTurns as number)
+      : undefined;
   switch (spec.id) {
-    case 'claude-code':
-      // `claude -p "<prompt>" --model <modelId> --dangerously-skip-permissions`
-      return {
-        binary: spec.binary,
-        args: ['-p', prompt, spec.modelFlag, modelId, '--dangerously-skip-permissions'],
-      };
+    case 'claude-code': {
+      // `claude -p "<prompt>" --model <modelId> [--max-turns <N>] --dangerously-skip-permissions`
+      const args = ['-p', prompt, spec.modelFlag, modelId];
+      if (maxTurns !== undefined) args.push('--max-turns', String(maxTurns));
+      args.push('--dangerously-skip-permissions');
+      return { binary: spec.binary, args };
+    }
     case 'codex':
       // `codex exec --model <modelId> --dangerously-bypass-approvals-and-sandbox "<prompt>"`
+      // codex has no equivalent of --max-turns; the flag is silently dropped.
       return {
         binary: spec.binary,
         args: [
@@ -96,7 +122,9 @@ export async function runExternalCodingAgent(
   const timeoutMs = opts.timeoutMs ?? DEFAULT_EXTERNAL_AGENT_TIMEOUT_MS;
   const spawner = opts.spawner ?? (spawn as unknown as ExternalAgentSpawner);
 
-  const { binary, args } = buildExternalAgentArgv(spec, prompt, opts.modelId);
+  const { binary, args } = buildExternalAgentArgv(spec, prompt, opts.modelId, {
+    maxTurns: opts.maxTurns,
+  });
 
   return new Promise<AgentRunResult>((resolve) => {
     const ts = () => new Date().toISOString();

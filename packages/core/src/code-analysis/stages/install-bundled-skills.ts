@@ -39,6 +39,22 @@ export function resolveAgentSkillsDir(cwd: string, codingAgent: CodingAgentId): 
   }
 }
 
+/**
+ * Bundled skills that get copy-pasted into a project's skills directory
+ * at setup time. Deliberately narrow: the bundled skills that survive
+ * here are the ones whose value is *agent-facing infrastructure* (harness
+ * scripts, tool wrappers) that projects shouldn't reinvent. Anything the
+ * user would want written against their actual codebase — conventions,
+ * commands, startup steps — belongs in `DEFAULT_GENERATED_SKILL_SLUGS`
+ * instead, so the wizard produces it per-repo.
+ *
+ * The user-level `seedBuiltinSkills` path (interactive harnext sessions)
+ * still seeds the full bundled set into `~/.harnext/skills/` — that is
+ * harnext's own skill library and is unrelated to what ends up in a
+ * specific project.
+ */
+export const PROJECT_BUNDLED_SKILLS: readonly string[] = ['browser-verify'];
+
 export interface InstallBundledSkillsResult {
   target: string;
   installed: string[];
@@ -47,10 +63,11 @@ export interface InstallBundledSkillsResult {
 }
 
 /**
- * Copy every bundled skill directory into the agent-specific project
- * skills dir. Each bundled skill lives at `<pkg>/skills/<name>/SKILL.md`.
- * Existing directories are preserved (never clobbered) so a user who
- * edited their `init/SKILL.md` doesn't lose the edit on re-run.
+ * Copy the allowlisted bundled skills (`PROJECT_BUNDLED_SKILLS`) into
+ * the agent-specific project skills dir. Bundled skills live at
+ * `<pkg>/skills/<name>/SKILL.md`; any entry outside the allowlist is
+ * ignored. Existing target directories are preserved (never clobbered)
+ * so a user edit in-place survives re-runs.
  */
 export function installBundledSkills(
   cwd: string,
@@ -70,11 +87,14 @@ export function installBundledSkills(
     };
   }
 
+  const allowlist = new Set(PROJECT_BUNDLED_SKILLS);
+
   try {
     mkdirSync(target, { recursive: true });
     for (const entry of readdirSync(source, { withFileTypes: true })) {
       if (entry.name.startsWith('.')) continue;
       if (!entry.isDirectory()) continue;
+      if (!allowlist.has(entry.name)) continue;
       const dest = join(target, entry.name);
       if (existsSync(dest)) {
         skipped.push(entry.name);

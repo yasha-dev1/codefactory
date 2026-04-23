@@ -14,6 +14,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 
 import { getCodingAgentSpec } from './coding-agents.js';
+import { CODE_ANALYSIS_MAX_TURNS } from './code-analysis/run-coding-agent.js';
 import { runExternalCodingAgent, type ExternalAgentSpawner } from './coding-agent-runner.js';
 import type { GithubConnectionConfig, StageEntry } from './github-connection.js';
 import { createAgentSession } from './sdk.js';
@@ -146,6 +147,7 @@ export async function generateStageWorkflow(
       const result = await runExternalCodingAgent(spec, promptSent, {
         cwd: input.cwd,
         modelId: input.cfg.codingAgentModel,
+        maxTurns: CODE_ANALYSIS_MAX_TURNS,
         spawner: input.spawner,
       });
       agentOutput = result.output;

@@ -16,12 +16,37 @@ import {
 } from '../coding-agent-runner.js';
 import { createAgentSession } from '../sdk.js';
 
+/**
+ * Turn budget for every setup-time agent invocation (tech-stack,
+ * risk-contract, check-scripts, project-skills, stage-prompts,
+ * workflow-generator). Deliberately generous — these runs are where
+ * the agent is supposed to read the whole repo, enumerate endpoints,
+ * follow manifests, and ground every output in real files. A low turn
+ * cap produces shallow skills (launch-commands only, no endpoint tour)
+ * which is exactly the failure we want to avoid.
+ *
+ * Runtime pipeline stages (github-poller) do NOT use this constant —
+ * they inherit claude-code's default cap so a runaway turn count on a
+ * live issue can't blow the budget.
+ */
+export const CODE_ANALYSIS_MAX_TURNS = 150;
+
 export interface RunCodingAgentOptions {
   cwd: string;
   codingAgent: CodingAgentId;
   /** Required for external agents; ignored (but accepted) for harnext. */
   codingAgentModel?: string;
   prompt: string;
+  /**
+   * Optional upper bound on the agent's turn count. Setup-time stages
+   * (tech-stack, risk-contract, check-scripts, project-skills,
+   * stage-prompts, workflow-generator) pass a high value so the agent
+   * can research the repo thoroughly before writing anything — init
+   * skills should enumerate manifests, endpoints, and entry points,
+   * not just dump launch commands. Agents without a matching flag
+   * (codex, harnext) ignore this.
+   */
+  maxTurns?: number;
   /** Test hook for external-agent spawning. */
   spawner?: ExternalAgentSpawner;
   /**
@@ -110,6 +135,7 @@ export async function runCodingAgent(
     const result = await runExternalCodingAgent(spec, opts.prompt, {
       cwd: opts.cwd,
       modelId: opts.codingAgentModel,
+      maxTurns: opts.maxTurns,
       spawner: opts.spawner,
       onLine: (line, stream) => {
         // Forward every non-empty line. The external CLI is the authority
