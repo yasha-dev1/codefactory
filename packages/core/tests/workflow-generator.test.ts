@@ -37,6 +37,7 @@ function baseCfg(
     repo: 'example/repo',
     pollIntervalMinutes: 15,
     filter: { kind: 'none' },
+    intake: { runner: { kind: 'local' } },
     stages: DEFAULT_STAGES,
     codingAgent: 'claude-code',
     codingAgentModel: 'claude-opus-4-7',

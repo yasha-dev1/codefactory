@@ -5,6 +5,7 @@ import { createInterface } from 'node:readline';
 import chalk from 'chalk';
 import {
   AWAITING_APPROVAL_LABEL,
+  DEFAULT_INTAKE,
   DEFAULT_STAGES,
   GITHUB_POLL_INTERVAL_PRESETS,
   NEEDS_JUDGMENT_LABEL,
@@ -41,6 +42,7 @@ import {
   type GithubConnectionConfig,
   type GithubIssueFilter,
   type GithubPollIntervalMinutes,
+  type IntakeStage,
   type NormalStage,
   type ReviewLoopStage,
   type StageEntry,
@@ -790,6 +792,7 @@ async function runRunnersStep(
           repo: cfg.repo,
           pollIntervalMinutes: 15,
           filter: { kind: 'none' },
+          intake: { runner: { kind: 'local' } },
           stages: [],
           codingAgent: cfg.codingAgent,
           codingAgentModel: cfg.codingAgentModel,
@@ -1023,6 +1026,12 @@ export async function runConnectGithubCommand(opts: ConnectGithubOptions): Promi
   }
 }
 
+function formatIntake(intake: IntakeStage): string {
+  return intake.runner.kind === 'local'
+    ? 'local (poller auto-labels)'
+    : `github-actions (${intake.runner.workflowPath})`;
+}
+
 function printConfig(cfg: GithubConnectionConfig): void {
   const agentLine = cfg.codingAgentModel
     ? `${cfg.codingAgent} (${cfg.codingAgentModel})`
@@ -1031,6 +1040,7 @@ function printConfig(cfg: GithubConnectionConfig): void {
   console.log(chalk.dim(`    repo:     `) + chalk.cyan(cfg.repo));
   console.log(chalk.dim(`    interval: `) + formatInterval(cfg.pollIntervalMinutes));
   console.log(chalk.dim(`    filter:   `) + formatFilter(cfg.filter));
+  console.log(chalk.dim(`    intake:   `) + formatIntake(cfg.intake));
   console.log(
     chalk.dim(`    stages:   `) +
       `${cfg.stages.length} (${cfg.stages.map((s) => s.id).join(' → ')})`,
@@ -1531,16 +1541,30 @@ async function createFlow(
   }
   console.log();
 
-  // Bootstrap tagger workflow.
-  // When the first stage runs on github-actions there is no process on
-  // the user's machine that applies the initial stage label to new
-  // issues — the cron poller usually plays that role. Emit a tiny GHA
-  // workflow that listens for issue events, applies the filter, and
-  // tags matching unlabeled issues with the first stage's label. When
-  // the first stage is local this whole step is a no-op: the poller
-  // still tags on the next tick, same as before.
+  // Step 3b: Stage 0 / intake runner. Explicit because it decides whether
+  // the local poller is still needed at all. Previously we inferred this
+  // from the first stage's runner — that tangled the "who applies the
+  // first label" question with "where does stage 1 run," and made it
+  // impossible to run a fully-GHA pipeline when the first stage happened
+  // to be local.
+  console.log(chalk.bold('  Step 3b: Stage 0 — intake runner'));
+  console.log(
+    chalk.dim('    Who applies the first stage label to new issues?'),
+  );
+  const intake = await pickIntake(current?.intake ?? DEFAULT_INTAKE);
+  if (!intake) {
+    console.log(chalk.dim('  Cancelled.'));
+    console.log();
+    return;
+  }
+  console.log();
+
+  // Bootstrap tagger workflow. Only written when intake runs on
+  // github-actions — otherwise the poller handles auto-labeling on its
+  // next tick, and emitting a tagger workflow would create a second
+  // writer on the same label boundary.
   const firstStage = stages[0];
-  if (firstStage && getStageRunner(firstStage).kind === 'github-actions') {
+  if (intake.runner.kind === 'github-actions' && firstStage) {
     const { path, existed } = writeTaggerWorkflow({
       cwd: opts.cwd,
       firstStage,
@@ -1553,12 +1577,12 @@ async function createFlow(
     );
     console.log(
       chalk.dim(
-        `    (first stage "${firstStage.id}" runs on github-actions — this workflow`,
+        `    (intake runs on github-actions — this workflow tags new issues`,
       ),
     );
     console.log(
       chalk.dim(
-        `     tags new issues matching the filter with ${firstStage.label}.)`,
+        `     matching the filter with ${firstStage.label}.)`,
       ),
     );
     // Reference `path` just to prove we held onto the absolute location
@@ -1568,12 +1592,15 @@ async function createFlow(
     console.log();
   }
 
-  // Step 4: polling interval — only when at least one stage runs locally.
-  // The cron poller exists to kick off local stages; if every stage is on
-  // GitHub Actions, the label-triggered workflow handles dispatch and
-  // polling is pointless. We skip the prompt and the cron install entirely
-  // in that case, and strip any stale cron line from a previous setup.
-  const needsPolling = stages.some((s) => getStageRunner(s).kind === 'local');
+  // Step 4: polling interval — needed when the poller has any job to do.
+  // The poller has two jobs: apply the first-stage label to unlabeled
+  // issues (when intake is local) and execute local stages (when any
+  // stage runs locally). Skip the prompt and cron install only when
+  // intake is GHA *and* every stage is GHA — in that case the
+  // label-triggered workflows handle everything and polling is pointless.
+  const needsPolling =
+    intake.runner.kind === 'local' ||
+    stages.some((s) => getStageRunner(s).kind === 'local');
   let interval: GithubPollIntervalMinutes;
   if (needsPolling) {
     console.log(chalk.bold('  Step 4: polling interval'));
@@ -1601,6 +1628,7 @@ async function createFlow(
     repo: detectedRepo,
     pollIntervalMinutes: interval,
     filter,
+    intake,
     stages,
     lastSeenUpdatedAt: current?.lastSeenUpdatedAt,
     codingAgent,
@@ -1689,6 +1717,56 @@ async function createFlow(
     console.log(chalk.dim('  If this machine has no `crontab`, install cron first.'));
     console.log();
   }
+}
+
+/**
+ * Pick where Stage 0 (intake) runs.
+ *
+ * "Intake" is the label-apply step that pulls fresh, unlabeled issues into
+ * the pipeline. We don't ask for a prompt or mode here — intake runs no
+ * agent. The only choice is *who* applies the first-stage label:
+ *   - `local`: the cron poller, on its next tick. Matches the historical
+ *     default before intake became an explicit field.
+ *   - `github-actions`: a deterministic tagger workflow we generate from
+ *     `tagger-workflow.ts`. When this is picked the poller MUST stay out
+ *     of the auto-label codepath; the poller code enforces that via
+ *     `cfg.intake.runner.kind === 'local'`.
+ */
+async function pickIntake(current: IntakeStage): Promise<IntakeStage | undefined> {
+  type Choice = { kind: 'local' } | { kind: 'gha' };
+  const currentKind = current.runner.kind;
+  const items: SelectItem<Choice>[] = [
+    {
+      label: 'Local',
+      value: { kind: 'local' },
+      hint:
+        currentKind === 'local'
+          ? 'current — poller auto-labels new issues on its next tick'
+          : 'poller auto-labels new issues on its next tick',
+    },
+    {
+      label: 'GitHub Actions',
+      value: { kind: 'gha' },
+      hint:
+        currentKind === 'github-actions'
+          ? `current — ${TAGGER_WORKFLOW_PATH}`
+          : 'generated tagger workflow applies the first-stage label on issue events',
+    },
+  ];
+  const picked = await select(items, {
+    title: 'Stage 0 — where should intake (apply first-stage label) run?',
+  });
+  if (!picked) return undefined;
+  if (picked.kind === 'local') {
+    return { runner: { kind: 'local' } };
+  }
+  return {
+    runner: {
+      kind: 'github-actions',
+      workflowPath: TAGGER_WORKFLOW_PATH,
+      origin: 'generated',
+    },
+  };
 }
 
 async function pickInterval(

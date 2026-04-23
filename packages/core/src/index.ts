@@ -152,6 +152,7 @@ export {
 export {
   GITHUB_CONFIG_FILE,
   GITHUB_POLL_INTERVAL_PRESETS,
+  DEFAULT_INTAKE,
   DEFAULT_STAGES,
   AWAITING_APPROVAL_LABEL,
   NEEDS_JUDGMENT_LABEL,
@@ -173,6 +174,7 @@ export {
   type GithubPollIntervalMinutes,
   type GithubIssueFilter,
   type GithubActionsRunner,
+  type IntakeStage,
   type LocalRunner,
   type NormalStage,
   type ReviewLoopStage,

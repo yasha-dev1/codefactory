@@ -981,7 +981,14 @@ export async function runPollTick(
     // sitting unclassified. Without this guard, every tick after a chain
     // completes would re-add the first-stage label and restart the pipeline
     // in an infinite loop.
-    if (!stage && !isPullRequest(item) && cfg.stages.length > 0) {
+    //
+    // Intake gate: when `cfg.intake.runner.kind === 'github-actions'` the
+    // generated tagger workflow is the sole writer for the first-stage
+    // label on new issues. The poller must not race it — two writers on the
+    // same boundary produce duplicate runs. So we skip auto-entry entirely
+    // and only pick up items that already carry a stage label.
+    const intakeRunsLocally = cfg.intake.runner.kind === 'local';
+    if (intakeRunsLocally && !stage && !isPullRequest(item) && cfg.stages.length > 0) {
       const labelSet = new Set(item.labels.map((l) => l.name));
       const parkedOnControlLabel =
         labelSet.has(AWAITING_APPROVAL_LABEL) || labelSet.has(NEEDS_JUDGMENT_LABEL);

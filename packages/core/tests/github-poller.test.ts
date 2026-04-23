@@ -80,6 +80,7 @@ function baseConfig(overrides: Partial<GithubConnectionConfig> = {}): GithubConn
     repo: 'example/repo',
     pollIntervalMinutes: 15,
     filter: { kind: 'none' },
+    intake: { runner: { kind: 'local' } },
     stages: DEFAULT_STAGES.map((s) => ({ ...s })),
     lastSeenUpdatedAt: '2026-04-19T10:00:00Z',
     codingAgent: 'harnext',
@@ -360,6 +361,33 @@ describe('runPollTick', () => {
     const result = await runPollTick(cfg, io);
     expect(result.processed).toBe(0);
     expect(result.newPointer).toBe(pr.updated_at);
+    expect(io.transitions).toHaveLength(0);
+    expect(io.prompts).toHaveLength(0);
+  });
+
+  it('does NOT auto-label when intake runs on github-actions (tagger workflow owns that boundary)', async () => {
+    // When intake is delegated to github-actions the generated tagger
+    // workflow is the sole writer for the first-stage label on new
+    // issues. The poller must stay silent — two writers on the same
+    // boundary produce duplicate runs.
+    const initial = makeItem({
+      number: 42,
+      labels: [{ name: 'bug' }],
+      updated_at: '2026-04-19T12:30:00Z',
+    });
+    const cfg = baseConfig({
+      intake: {
+        runner: {
+          kind: 'github-actions',
+          workflowPath: '.github/workflows/harnext-tagger.yml',
+          origin: 'generated',
+        },
+      },
+    });
+    const io = makeIo({ items: [initial], agentResults: [] });
+    const result = await runPollTick(cfg, io);
+    expect(result.processed).toBe(0);
+    expect(result.newPointer).toBe(initial.updated_at);
     expect(io.transitions).toHaveLength(0);
     expect(io.prompts).toHaveLength(0);
   });
