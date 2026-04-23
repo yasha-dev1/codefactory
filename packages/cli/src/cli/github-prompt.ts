@@ -855,13 +855,52 @@ async function runRunnersStep(
         chalk.dim('    • git add .github/workflows/ && commit && push the generated workflow(s)'),
       );
     }
-    console.log(
-      chalk.dim(
-        `    • gh secret set ANTHROPIC_API_KEY / OPENAI_API_KEY (as needed) in ${cfg.repo}`,
-      ),
-    );
+    printAgentSecretsReminder(cfg.codingAgent, cfg.repo);
     console.log();
   }
+}
+
+/**
+ * Agent-specific setup checklist printed after any stage gets wired to
+ * GitHub Actions. Keeps the authoritative "what secret does the workflow
+ * actually need" answer in one place so it cannot drift from the workflow
+ * generator's auth choice.
+ */
+function printAgentSecretsReminder(agent: CodingAgentId, repo: string): void {
+  if (agent === 'claude-code') {
+    console.log(
+      chalk.dim('    • Install the Claude Code GitHub App on ') + chalk.cyan(repo),
+    );
+    console.log(
+      chalk.dim('      (https://github.com/apps/claude — the workflow authenticates via OAuth,'),
+    );
+    console.log(
+      chalk.dim("       billed against the user's Claude subscription, not API usage)"),
+    );
+    console.log(
+      chalk.dim(`    • gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo ${repo}`),
+    );
+    console.log(
+      chalk.dim('    • Repo Settings → Actions → General → enable'),
+    );
+    console.log(
+      chalk.dim('      "Allow GitHub Actions to create and approve pull requests"'),
+    );
+    return;
+  }
+  if (agent === 'codex') {
+    console.log(
+      chalk.dim(`    • gh secret set OPENAI_API_KEY --repo ${repo}`),
+    );
+    return;
+  }
+  // harnext — user picks the provider via /model, so any provider key could apply.
+  console.log(
+    chalk.dim(
+      `    • gh secret set ANTHROPIC_API_KEY (or OPENAI_API_KEY / GOOGLE_API_KEY` +
+        ` as your provider needs) --repo ${repo}`,
+    ),
+  );
 }
 
 async function removeStage(stages: StageEntry[]): Promise<number | undefined> {
@@ -1418,6 +1457,49 @@ async function createFlow(
     }
     codingAgent = pickedAgent;
     console.log();
+
+    // Pre-flight for claude-code: surface the OAuth requirement *before*
+    // the user generates any workflows, so they know they need the App
+    // installed before their first issue arrives — otherwise the first
+    // Actions run fails with a confusing "authentication required" error.
+    if (codingAgent === 'claude-code') {
+      console.log(chalk.bold('  Claude Code setup (one-time):'));
+      console.log(
+        chalk.dim(
+          '    Generated workflows authenticate via OAuth against the Claude Code',
+        ),
+      );
+      console.log(
+        chalk.dim(
+          "    GitHub App — usage counts against the user's Claude subscription",
+        ),
+      );
+      console.log(
+        chalk.dim(
+          '    (Pro/Max), which is materially cheaper than a metered API key.',
+        ),
+      );
+      console.log();
+      console.log(
+        chalk.dim('      1. Install the Claude Code GitHub App: https://github.com/apps/claude'),
+      );
+      console.log(
+        chalk.dim('      2. Set CLAUDE_CODE_OAUTH_TOKEN as a repo secret'),
+      );
+      console.log(
+        chalk.dim('      3. Repo Settings → Actions → General → enable'),
+      );
+      console.log(
+        chalk.dim('         "Allow GitHub Actions to create and approve pull requests"'),
+      );
+      console.log(
+        chalk.dim(
+          '    You can complete these after the wizard — the checklist will repeat',
+        ),
+      );
+      console.log(chalk.dim('    at the end.'));
+      console.log();
+    }
 
     if (codingAgent === 'harnext') {
       // Delegate to the existing provider+model picker so the behaviour is

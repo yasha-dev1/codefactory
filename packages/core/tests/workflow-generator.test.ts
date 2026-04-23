@@ -198,6 +198,61 @@ describe('WORKFLOW_PROMPT_BUNDLES', () => {
     expect(prompt).toContain('harnext:needs-judgment');
   });
 
+  it('claude-code reference authenticates via OAuth, not the API key', () => {
+    const bundle = WORKFLOW_PROMPT_BUNDLES['claude-code'];
+    expect(bundle.referenceYaml).toContain('claude_code_oauth_token');
+    expect(bundle.referenceYaml).toContain('CLAUDE_CODE_OAUTH_TOKEN');
+    expect(bundle.referenceYaml).not.toMatch(/anthropic_api_key/i);
+    expect(bundle.referenceYaml).not.toContain('ANTHROPIC_API_KEY');
+  });
+
+  it('claude-code reference bakes in the action-specific safety constraints', () => {
+    const bundle = WORKFLOW_PROMPT_BUNDLES['claude-code'];
+    const yaml = bundle.referenceYaml;
+    // Tool allowlist — without this every Bash/Edit/Write is silently denied.
+    expect(yaml).toContain('--allowedTools');
+    // Bot actor bypass — needed when another workflow dispatches this one.
+    expect(yaml).toContain("allowed_bots: 'github-actions'");
+    // Dispatch fallback — GitHub suppresses `labeled` events for labels
+    // added via GITHUB_TOKEN, so chained workflows must accept
+    // workflow_dispatch.
+    expect(yaml).toContain('workflow_dispatch');
+    expect(yaml).toMatch(/issue_number/);
+    // Guidance for reading Claude's output via execution_file (there is no
+    // `result` output on the action).
+    expect(yaml).toMatch(/execution_file/i);
+  });
+
+  it('claude-code prompt forbids the API key path and mandates OAuth', () => {
+    const bundle = WORKFLOW_PROMPT_BUNDLES['claude-code'];
+    const prompt = bundle.buildGeneratorPrompt({
+      ...baseInput,
+      stage: toStageWorkflowStage(DEFAULT_STAGES[0] as NormalStage),
+    });
+    // Explicit directive in the prompt (not just the embedded reference).
+    expect(prompt).toMatch(/claude_code_oauth_token/);
+    expect(prompt).toMatch(/CLAUDE_CODE_OAUTH_TOKEN/);
+    expect(prompt).toMatch(/do not emit `?anthropic_api_key/i);
+    // Required constraints are called out as hard requirements.
+    expect(prompt).toMatch(/--allowedTools/);
+    expect(prompt).toMatch(/allowed_bots/);
+    expect(prompt).toMatch(/workflow_dispatch/);
+    expect(prompt).toMatch(/execution_file/);
+    // Read-only stage (triage) gets the read-only tool allowlist.
+    expect(prompt).toContain('Read,Glob,Grep,Bash');
+    expect(prompt).not.toContain('Read,Glob,Grep,Bash,Edit,Write');
+  });
+
+  it('claude-code prompt widens the tool allowlist for write-capable stages', () => {
+    const bundle = WORKFLOW_PROMPT_BUNDLES['claude-code'];
+    const implement = DEFAULT_STAGES.find((s) => s.id === 'implement') as NormalStage;
+    const prompt = bundle.buildGeneratorPrompt({
+      ...baseInput,
+      stage: toStageWorkflowStage(implement),
+    });
+    expect(prompt).toContain('Read,Glob,Grep,Bash,Edit,Write');
+  });
+
   it('codex prompt cites the docs URL', () => {
     const bundle = WORKFLOW_PROMPT_BUNDLES.codex;
     const prompt = bundle.buildGeneratorPrompt({
