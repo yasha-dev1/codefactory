@@ -49,10 +49,23 @@ export interface RunCodingAgentResult {
   error?: string;
 }
 
+/** Emit a "still running" heartbeat every N seconds when the agent goes silent. */
+const HEARTBEAT_INTERVAL_MS = 10_000;
+/** Don't heartbeat right after a genuine activity line — wait at least this long. */
+const HEARTBEAT_QUIET_AFTER_MS = 8_000;
+
 export async function runCodingAgent(
   opts: RunCodingAgentOptions,
 ): Promise<RunCodingAgentResult> {
+  // Track the last time ANY activity was emitted (real or heartbeat) so
+  // the heartbeat only fires during genuine silence. Some agents
+  // (claude-code in `-p` mode) run 30–120s without any chatter;
+  // without a heartbeat the user can't tell the process from a hang.
+  let lastActivityAt = Date.now();
+  const startedAt = lastActivityAt;
+
   const activity = (line: string): void => {
+    lastActivityAt = Date.now();
     if (!opts.onActivity) return;
     try {
       opts.onActivity(line);
@@ -61,42 +74,60 @@ export async function runCodingAgent(
     }
   };
 
-  if (opts.codingAgent === 'harnext') {
-    if (opts.runHarnextAgent) {
-      try {
-        return { output: await opts.runHarnextAgent(opts.prompt, opts.cwd) };
-      } catch (err) {
-        return { output: '', error: err instanceof Error ? err.message : String(err) };
-      }
+  const heartbeat = setInterval(() => {
+    if (!opts.onActivity) return;
+    if (Date.now() - lastActivityAt < HEARTBEAT_QUIET_AFTER_MS) return;
+    const elapsed = Math.round((Date.now() - startedAt) / 1000);
+    try {
+      opts.onActivity(`still running… (${elapsed}s elapsed)`);
+    } catch {
+      // swallow
     }
-    return runHarnextSession(opts.prompt, opts.cwd, activity);
-  }
+    lastActivityAt = Date.now();
+  }, HEARTBEAT_INTERVAL_MS);
+  // Don't keep the event loop alive just for the heartbeat.
+  heartbeat.unref();
 
-  const spec = getCodingAgentSpec(opts.codingAgent);
-  if (!opts.codingAgentModel) {
-    return {
-      output: '',
-      error: `coding agent "${spec.id}" requires a model id`,
-    };
-  }
-  const result = await runExternalCodingAgent(spec, opts.prompt, {
-    cwd: opts.cwd,
-    modelId: opts.codingAgentModel,
-    spawner: opts.spawner,
-    onLine: (line, stream) => {
-      // Forward every non-empty line. The external CLI is the authority
-      // on what's worth emitting; we don't filter by stream since
-      // different agents use stdout/stderr differently.
-      const trimmed = line.trim();
-      if (trimmed.length > 0) {
-        activity(stream === 'stderr' ? `stderr: ${trimmed}` : trimmed);
+  try {
+    if (opts.codingAgent === 'harnext') {
+      if (opts.runHarnextAgent) {
+        try {
+          return { output: await opts.runHarnextAgent(opts.prompt, opts.cwd) };
+        } catch (err) {
+          return { output: '', error: err instanceof Error ? err.message : String(err) };
+        }
       }
-    },
-  });
-  return {
-    output: result.output,
-    error: result.exit !== 0 ? result.error ?? `agent exited ${result.exit}` : undefined,
-  };
+      return await runHarnextSession(opts.prompt, opts.cwd, activity);
+    }
+
+    const spec = getCodingAgentSpec(opts.codingAgent);
+    if (!opts.codingAgentModel) {
+      return {
+        output: '',
+        error: `coding agent "${spec.id}" requires a model id`,
+      };
+    }
+    const result = await runExternalCodingAgent(spec, opts.prompt, {
+      cwd: opts.cwd,
+      modelId: opts.codingAgentModel,
+      spawner: opts.spawner,
+      onLine: (line, stream) => {
+        // Forward every non-empty line. The external CLI is the authority
+        // on what's worth emitting; we don't filter by stream since
+        // different agents use stdout/stderr differently.
+        const trimmed = line.trim();
+        if (trimmed.length > 0) {
+          activity(stream === 'stderr' ? `stderr: ${trimmed}` : trimmed);
+        }
+      },
+    });
+    return {
+      output: result.output,
+      error: result.exit !== 0 ? result.error ?? `agent exited ${result.exit}` : undefined,
+    };
+  } finally {
+    clearInterval(heartbeat);
+  }
 }
 
 async function runHarnextSession(

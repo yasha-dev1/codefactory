@@ -112,6 +112,16 @@ export async function runExternalCodingAgent(
         cwd: opts.cwd,
         env: { ...process.env },
       });
+      // Close stdin immediately. claude-code (and some other agents)
+      // wait up to a few seconds for stdin data before proceeding when
+      // stdin is piped-but-empty, emitting a "no stdin data received"
+      // warning on stderr. We pass the prompt via argv, so there's
+      // never anything to send — signal EOF right away.
+      try {
+        child.stdin?.end();
+      } catch {
+        // best effort; if stdin was already closed, ignore
+      }
     } catch (err) {
       resolve({
         exit: 1,

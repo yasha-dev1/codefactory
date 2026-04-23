@@ -76,6 +76,13 @@ export {
 } from './workflow-generator.js';
 
 export {
+  TAGGER_WORKFLOW_PATH,
+  buildTaggerWorkflow,
+  writeTaggerWorkflow,
+  type BuildTaggerWorkflowInput,
+} from './tagger-workflow.js';
+
+export {
   ANALYSIS_PHASES,
   DEFAULT_GENERATED_SKILL_SLUGS,
   RISK_CONTRACT_FILE,

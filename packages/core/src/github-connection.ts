@@ -235,21 +235,6 @@ export const DEFAULT_STAGES: StageEntry[] = [
     ].join('\n'),
   },
   {
-    kind: 'normal',
-    id: 'verify',
-    label: 'harnext:verify',
-    mode: 'yolo',
-    prompt: [
-      'Stage: verify.',
-      '',
-      "Check out the pull request branch. Run the project's tests, lint, and",
-      'typecheck. Post a single PR comment with the command exit codes and a',
-      'short excerpt of the failing output (if any). If a check fails and',
-      'the fix is mechanical (formatting, import order, obvious typos),',
-      'commit the fix to the same branch and push.',
-    ].join('\n'),
-  },
-  {
     kind: 'review-loop',
     id: 'review',
     label: 'harnext:review',
@@ -281,6 +266,21 @@ export const DEFAULT_STAGES: StageEntry[] = [
       ].join('\n'),
     },
     onExit: 'human-approval',
+  },
+  {
+    kind: 'normal',
+    id: 'verify',
+    label: 'harnext:verify',
+    mode: 'yolo',
+    prompt: [
+      'Stage: verify.',
+      '',
+      "Check out the pull request branch. Run the project's tests, lint, and",
+      'typecheck. Post a single PR comment with the command exit codes and a',
+      'short excerpt of the failing output (if any). If a check fails and',
+      'the fix is mechanical (formatting, import order, obvious typos),',
+      'commit the fix to the same branch and push.',
+    ].join('\n'),
   },
 ];
 

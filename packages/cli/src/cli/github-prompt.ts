@@ -30,6 +30,8 @@ import {
   removeCronLine,
   runCodeAnalysisPipeline,
   saveGithubConnection,
+  writeTaggerWorkflow,
+  TAGGER_WORKFLOW_PATH,
   setDefault,
   verifyGhAuth,
   type AnalysisEvent,
@@ -690,24 +692,34 @@ async function runRunnersStep(
       | { kind: 'generate' }
       | { kind: 'skip' };
     const current = getStageRunner(stage);
-    const items: SelectItem<Choice>[] = [
-      {
-        label: 'Keep local',
-        value: { kind: 'local' },
-        hint: current.kind === 'local' ? 'current — poller runs this stage' : 'poller runs this stage',
-      },
-      {
-        label: 'Connect existing GitHub Actions workflow',
-        value: { kind: 'connect' },
-        hint: 'point at a workflow file you already authored',
-      },
-      {
-        label: 'Generate a new GitHub Actions workflow',
-        value: { kind: 'generate' },
-        hint: `ask ${cfg.codingAgent} to write .github/workflows/harnext-${stage.id}.yml`,
-      },
-      { label: 'Skip (keep as-is)', value: { kind: 'skip' } },
-    ];
+    const localItem: SelectItem<Choice> = {
+      label: 'Keep local',
+      value: { kind: 'local' },
+      hint: current.kind === 'local' ? 'current — poller runs this stage' : 'poller runs this stage',
+    };
+    const generateItem: SelectItem<Choice> = {
+      label: 'Generate a new GitHub Actions workflow',
+      value: { kind: 'generate' },
+      hint: `ask ${cfg.codingAgent} to write .github/workflows/harnext-${stage.id}.yml`,
+    };
+    const connectItem: SelectItem<Choice> = {
+      label: 'Connect existing GitHub Actions workflow',
+      value: { kind: 'connect' },
+      hint: 'point at a workflow file you already authored',
+    };
+    const skipItem: SelectItem<Choice> = { label: 'Skip (keep as-is)', value: { kind: 'skip' } };
+
+    // Default preference per stage: `verify` runs local by default (it's
+    // the CI-style validation stage and tends to need the user's node
+    // env, browser, etc.). Every other stage defaults to GitHub Actions
+    // so the pipeline ships to the remote workflow without the user
+    // having to flip each one. The picker still offers all four — we
+    // just reorder so the first item (the `select` widget's initial
+    // highlight) matches the preferred default.
+    const items: SelectItem<Choice>[] =
+      stage.id === 'verify'
+        ? [localItem, generateItem, connectItem, skipItem]
+        : [generateItem, connectItem, localItem, skipItem];
     const choice = await select(items, { title: 'How should this stage run?' });
     if (!choice || choice.kind === 'skip') continue;
 
@@ -1231,6 +1243,42 @@ function makeAnalysisProgressPrinter(): (e: AnalysisEvent) => void {
   };
 }
 
+/**
+ * Pre-populate every non-verify stage's `runner` field with a
+ * github-actions entry pointing at the conventional workflow path, so
+ * the stages table renders with the intended default before the user
+ * hits the runner picker. The `verify` stage stays local (by leaving
+ * its `runner` field undefined — `getStageRunner` resolves to local).
+ *
+ * Stages that already have an explicit `runner` (e.g. a saved config
+ * being edited) are left alone — user intent wins over defaults.
+ *
+ * When the TechStack detected a non-GitHub CI provider (GitLab,
+ * CircleCI, etc.) we bail entirely and leave every stage local, since
+ * harnext doesn't yet author workflows for those providers.
+ */
+function applyDefaultRunners(
+  stages: StageEntry[],
+  techStack: TechStack,
+): StageEntry[] {
+  const ci = techStack.ciProvider;
+  const supportsGHA = ci === 'github-actions' || ci === null;
+  if (!supportsGHA) return stages;
+
+  return stages.map((stage) => {
+    if (stage.id === 'verify') return stage;
+    if (stage.runner) return stage;
+    return {
+      ...stage,
+      runner: {
+        kind: 'github-actions',
+        workflowPath: `.github/workflows/harnext-${stage.id}.yml`,
+        origin: 'generated',
+      },
+    } as StageEntry;
+  });
+}
+
 async function runAnalysisStep(
   cwd: string,
   codingAgent: CodingAgentId,
@@ -1329,7 +1377,7 @@ async function runAnalysisStep(
     );
   }
 
-  return result.stages;
+  return applyDefaultRunners(result.stages, result.techStack);
 }
 
 /**
@@ -1482,6 +1530,43 @@ async function createFlow(
     return;
   }
   console.log();
+
+  // Bootstrap tagger workflow.
+  // When the first stage runs on github-actions there is no process on
+  // the user's machine that applies the initial stage label to new
+  // issues — the cron poller usually plays that role. Emit a tiny GHA
+  // workflow that listens for issue events, applies the filter, and
+  // tags matching unlabeled issues with the first stage's label. When
+  // the first stage is local this whole step is a no-op: the poller
+  // still tags on the next tick, same as before.
+  const firstStage = stages[0];
+  if (firstStage && getStageRunner(firstStage).kind === 'github-actions') {
+    const { path, existed } = writeTaggerWorkflow({
+      cwd: opts.cwd,
+      firstStage,
+      filter,
+    });
+    console.log(
+      chalk.dim(
+        `  Tagger workflow ${existed ? 'refreshed' : 'written'} → ${TAGGER_WORKFLOW_PATH}`,
+      ),
+    );
+    console.log(
+      chalk.dim(
+        `    (first stage "${firstStage.id}" runs on github-actions — this workflow`,
+      ),
+    );
+    console.log(
+      chalk.dim(
+        `     tags new issues matching the filter with ${firstStage.label}.)`,
+      ),
+    );
+    // Reference `path` just to prove we held onto the absolute location
+    // for any future pre-save validation. `TAGGER_WORKFLOW_PATH` is what
+    // we surface to the user since it's git-relative.
+    void path;
+    console.log();
+  }
 
   // Step 4: polling interval — only when at least one stage runs locally.
   // The cron poller exists to kick off local stages; if every stage is on

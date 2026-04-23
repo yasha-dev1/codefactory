@@ -12,7 +12,7 @@
  * an agent and lives in `install-bundled-skills.ts` next door.
  */
 
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import type { CodingAgentId } from '../../coding-agents.js';
@@ -90,8 +90,20 @@ export async function runProjectSkillsStage(
     })
     .join('\n');
 
+  // Stage agent writes into the session scratch dir, not directly into
+  // the real target. Why:
+  //   - For `claude-code`, the real target is `.claude/skills/` — inside
+  //     its *own* config dir, which its permission system refuses writes
+  //     to even with `--dangerously-skip-permissions`. The agent would
+  //     loop and fail.
+  //   - For any agent, a two-phase write (agent → scratch, harness →
+  //     target) means we can validate each SKILL.md before promoting it
+  //     and never leave partial files in the real skills dir.
+  const stagedDir = opts.session.pathFor('project-skills', 'skills');
+  mkdirSync(stagedDir, { recursive: true });
+
   const prompt = renderPrompt(loadPrompt('project-skills'), {
-    skillsDir: target,
+    skillsDir: stagedDir,
     slugsList,
     techStackJson: JSON.stringify(opts.techStack, null, 2),
     sessionDir: opts.session.root,
@@ -109,7 +121,7 @@ export async function runProjectSkillsStage(
   });
 
   if (error) {
-    opts.session.appendManifest({ stage: 'project-skills', outputs: [target] });
+    opts.session.appendManifest({ stage: 'project-skills', outputs: [stagedDir] });
     return {
       target,
       generated: [],
@@ -121,23 +133,35 @@ export async function runProjectSkillsStage(
   const generated: string[] = [];
   const missing: string[] = [];
   for (const slug of slugs) {
-    const file = join(target, slug, 'SKILL.md');
-    if (!existsSync(file)) {
+    const staged = join(stagedDir, slug, 'SKILL.md');
+    if (!existsSync(staged)) {
       missing.push(slug);
       continue;
     }
     try {
-      const raw = readFileSync(file, 'utf-8');
-      if (hasValidFrontmatter(raw)) {
-        generated.push(slug);
-      } else {
+      const raw = readFileSync(staged, 'utf-8');
+      if (!hasValidFrontmatter(raw)) {
         missing.push(slug);
+        continue;
       }
+      // Promote the staged skill into the real target. Preserves user
+      // edits: if the target already has this slug, leave it alone
+      // (same policy as `installBundledSkills` at
+      // `install-bundled-skills.ts:91`).
+      const destDir = join(target, slug);
+      if (existsSync(destDir)) {
+        // Already present — treat as generated so the caller sees it
+        // in the "present" column, even though we didn't copy over it.
+        generated.push(slug);
+        continue;
+      }
+      cpSync(join(stagedDir, slug), destDir, { recursive: true });
+      generated.push(slug);
     } catch {
       missing.push(slug);
     }
   }
 
-  opts.session.appendManifest({ stage: 'project-skills', outputs: [target] });
+  opts.session.appendManifest({ stage: 'project-skills', outputs: [stagedDir] });
   return { target, generated, missing };
 }

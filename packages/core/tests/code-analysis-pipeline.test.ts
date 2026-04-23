@@ -23,7 +23,7 @@ function makeStubAgent(handlers: {
   riskContract?: (outputPath: string) => unknown;
   checkScripts?: (prompt: string) => void;
   stagePrompts?: (outputPath: string) => unknown;
-  projectSkills?: (cwd: string) => void;
+  projectSkills?: (prompt: string, cwd: string) => void;
 }): (prompt: string, cwd: string) => Promise<string> {
   // Branch order matters: later stages' prompts reference earlier stages'
   // outputs (e.g. the risk-contract prompt says "Read the TechStack
@@ -56,7 +56,7 @@ function makeStubAgent(handlers: {
       return 'wrote stages';
     }
     if (prompt.includes('Agent Skills') || prompt.includes('SKILL.md')) {
-      if (handlers.projectSkills) handlers.projectSkills(cwd);
+      if (handlers.projectSkills) handlers.projectSkills(prompt, cwd);
       return 'wrote skills';
     }
     return '';
@@ -182,8 +182,17 @@ describe('runCodeAnalysisPipeline', () => {
             writeFileSync(entry.filePath, `#!/usr/bin/env bash\necho ${entry.id}\n`, 'utf-8');
           }
         },
-        projectSkills: (cwd) => {
-          const base = join(cwd, '.harnext', 'skills');
+        projectSkills: (prompt) => {
+          // The stage now asks the agent to write into a session-scratch
+          // dir (so .claude/** permission prompts can't block). The real
+          // skills dir is populated by the harness's cpSync promotion
+          // step after the agent returns. Mirror that here by writing
+          // under the `skillsDir` variable the prompt embeds.
+          const match = prompt.match(
+            /Skills live under:\s*\n\s*([^\s]+)/,
+          );
+          const base = match ? match[1] : '';
+          if (!base) return;
           for (const slug of ['codebase-conventions', 'run-checks', 'verify-implementation']) {
             const dir = join(base, slug);
             mkdirSync(dir, { recursive: true });
