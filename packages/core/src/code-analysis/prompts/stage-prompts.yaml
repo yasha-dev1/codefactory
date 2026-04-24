@@ -35,24 +35,48 @@ prompt: |
     - verify    : check out the PR branch, run tests / lint /
                   typecheck, post one PR comment with exit codes.
                   Commit mechanical fixes only.
-                  **UI verification (only when any TechStack package
-                  has `hasUI: true`):** for PRs that touch a UI
-                  package, the verify prompt MUST instruct the agent
-                  to drive a real browser and attach evidence before
-                  concluding. Two ways, in preference order:
-                    1. Use the bundled `browser-verify` skill — it
-                       drives Chrome/Edge/Brave via Playwright,
-                       produces a video + trace + accessibility
-                       snapshots under `.harnext/browser-verify/`,
-                       and exits non-zero on failure. Reference it
-                       by name; the skill is already installed.
-                    2. If a `chrome-devtools` MCP server is
-                       configured, drive the page via those tools
-                       (`navigate_page`, `take_screenshot`,
-                       `list_console_messages`, `list_network_requests`)
-                       and attach the screenshot to the PR.
-                  For PRs that do NOT touch a UI path, skip browser
-                  work — tests/lint/typecheck are enough.
+                  **UI verification is MANDATORY** when any
+                  TechStack package has `hasUI: true` AND the PR
+                  diff (`gh pr diff --name-only`) touches a file
+                  under one of those packages' paths. The verify
+                  prompt MUST state this as a hard requirement
+                  with NO escape hatch. Specifically:
+                    1. The prompt MUST name the bundled
+                       `browser-verify` skill as the sole
+                       mechanism — not "preferred" with a
+                       fallback. The skill is pre-installed.
+                    2. The prompt MUST forbid these excuses
+                       verbatim: "requires authenticated
+                       workspace", "skipped: tool missing",
+                       "change is too small/trivial to test",
+                       "no reproduction available". The skill
+                       runs headful against the user's real
+                       Chrome profile (auto-cloned) — no auth
+                       setup is needed.
+                    3. The prompt MUST demand that even a pure
+                       CSS / Tailwind / copy tweak produces a
+                       minimal scenario: navigate to a page
+                       containing the changed component, take
+                       one a11y snapshot, assert the component
+                       exists. Skipping is never acceptable on
+                       a UI-touching PR.
+                    4. The prompt MUST tell the agent to cite
+                       the three artifact paths produced by the
+                       skill in the final PR comment:
+                         `.harnext/browser-verify/<runId>/video/recording.webm`
+                         `.harnext/browser-verify/<runId>/network.har`
+                         `.harnext/browser-verify/<runId>/trace.zip`
+                       (paths come from the skill's JSON
+                       output — cite verbatim, don't invent).
+                    5. The prompt MUST FAIL the stage on any of:
+                       non-zero exit from the skill, a new
+                       `pageErrors` entry (vs. main), or a
+                       failing scenario assertion.
+                  For PRs that do NOT touch a UI path, skip
+                  browser work — tests/lint/typecheck are enough.
+                  The `chrome-devtools` MCP fallback is retired:
+                  do not mention it. `browser-verify` handles
+                  all cases it previously covered.
     - review    : `review` = post one PR review (approve / request
                   changes / comment).
                   `fix`    = address a changes_requested review by
