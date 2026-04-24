@@ -115,12 +115,50 @@ function triggerSpec(triggerOn: 'issues' | 'pull_request' | 'both'): string {
   }
 }
 
+/**
+ * Resolve `$ISSUE_NUMBER` / `$PR_NUMBER` style placeholders in a stage
+ * prompt to the equivalent GitHub Actions expression, so the real number
+ * reaches the claude-code-action `prompt:` field.
+ *
+ * Why this exists: stage prompts are authored by the code-analysis
+ * pipeline as human-readable Markdown with shell-style placeholders
+ * (`$ISSUE_NUMBER`, `${ISSUE_NUMBER}`, `$PR_NUMBER`, `${PR_NUMBER}`).
+ * The `prompt:` field on `anthropics/claude-code-action@v1` is a plain
+ * YAML string — it does NOT run through a shell, so `$VAR` stays
+ * literal. When the workflow triggers via `workflow_dispatch` (the
+ * normal case once dispatch-chaining is in use), there is no
+ * `github.event.issue` payload for the action to fall back on, so the
+ * agent has no idea what issue it is working on.
+ *
+ * The fix: substitute at YAML-embed time with the full fallback chain
+ * — issue event → PR event → workflow_dispatch input — so the same
+ * expression works on every trigger path. PR number and issue number
+ * share the expression because we reuse a single `issue_number` input
+ * across issue/PR dispatches (the harness never needs them
+ * simultaneously in one run).
+ *
+ * Caught live on flowhunt's urlslab-app issue #5336: triage worked
+ * because `issues.labeled` gave the action issue context, but implement
+ * (dispatched via workflow_dispatch from plan) no-op'd — the prompt
+ * literally read `gh issue view $ISSUE_NUMBER` with nothing to expand.
+ */
+const ISSUE_NUMBER_EXPR =
+  '${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }}';
+
+export function substituteIssueNumberPlaceholders(prompt: string): string {
+  return prompt
+    .replace(/\$\{ISSUE_NUMBER\}/g, ISSUE_NUMBER_EXPR)
+    .replace(/\$ISSUE_NUMBER\b/g, ISSUE_NUMBER_EXPR)
+    .replace(/\$\{PR_NUMBER\}/g, ISSUE_NUMBER_EXPR)
+    .replace(/\$PR_NUMBER\b/g, ISSUE_NUMBER_EXPR);
+}
+
 function stagePromptBlock(input: StageWorkflowInput): string {
   if (input.stage.kind === 'normal') {
     return [
       'Stage prompt to hand the agent verbatim:',
       '----- BEGIN STAGE PROMPT -----',
-      input.stage.prompt,
+      substituteIssueNumberPlaceholders(input.stage.prompt),
       '----- END STAGE PROMPT -----',
     ].join('\n');
   }
@@ -131,12 +169,12 @@ function stagePromptBlock(input: StageWorkflowInput): string {
     '',
     'Reviewer prompt:',
     '----- BEGIN REVIEWER PROMPT -----',
-    input.stage.reviewPrompt,
+    substituteIssueNumberPlaceholders(input.stage.reviewPrompt),
     '----- END REVIEWER PROMPT -----',
     '',
     'Fixer prompt:',
     '----- BEGIN FIXER PROMPT -----',
-    input.stage.fixPrompt,
+    substituteIssueNumberPlaceholders(input.stage.fixPrompt),
     '----- END FIXER PROMPT -----',
   ].join('\n');
 }
@@ -366,6 +404,12 @@ function buildClaudeCodePrompt(input: StageWorkflowInput): string {
     '  g) Job permissions must cover what this stage does: at minimum `issues: write`,',
     '     `contents: read` (or `write` for stages that push), `actions: write` when the',
     '     stage dispatches another workflow, and `id-token: write` for OAuth exchange.',
+    '  i) Preserve every `${{ … }}` expression you see inside the embedded stage prompt',
+    '     EXACTLY as given — specifically the issue-number expression',
+    '     `${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }}`.',
+    '     Do not rewrite it, simplify it, or replace it with `$ISSUE_NUMBER`. The agent',
+    '     running the stage needs the resolved number — a literal `$ISSUE_NUMBER` in',
+    '     the `prompt:` field is NOT expanded by the claude-code-action.',
     ...(dispatchConstraint ? [dispatchConstraint] : []),
     '',
     'Use the GH_TOKEN from secrets.GITHUB_TOKEN for label transitions and gh CLI calls.',

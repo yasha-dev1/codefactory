@@ -15,6 +15,7 @@ import {
 } from '../src/github-connection.js';
 import {
   WORKFLOW_PROMPT_BUNDLES,
+  substituteIssueNumberPlaceholders,
   toStageWorkflowStage,
 } from '../src/workflow-prompts.js';
 import { generateStageWorkflow } from '../src/workflow-generator.js';
@@ -326,5 +327,112 @@ describe('WORKFLOW_PROMPT_BUNDLES', () => {
       stage: toStageWorkflowStage(DEFAULT_STAGES[0] as NormalStage),
     });
     expect(prompt).not.toMatch(/gh workflow run harnext-/);
+  });
+
+  it('embedded stage prompt substitutes $ISSUE_NUMBER placeholders with the GHA expression', () => {
+    // Live bug from flowhunt's urlslab-app issue #5336: implement stage
+    // no-op'd because the prompt contained the literal string
+    // `$ISSUE_NUMBER`. The claude-code-action's `prompt:` field does
+    // not run through a shell, so `$VAR` stays literal. When implement
+    // fires on workflow_dispatch (the normal path once chain-dispatch
+    // is in use), there's no `github.event.issue` either — the agent
+    // simply has no issue to work on. Substitution at YAML-embed time
+    // is what makes the expression resolve to a real number via the
+    // fallback chain (issue → PR → workflow_dispatch input).
+    const bundle = WORKFLOW_PROMPT_BUNDLES['claude-code'];
+    const stage: NormalStage = {
+      kind: 'normal',
+      id: 'implement',
+      label: 'harnext:implement',
+      mode: 'yolo',
+      prompt:
+        'Run `gh issue view $ISSUE_NUMBER` and open a branch ' +
+        '`issue/${ISSUE_NUMBER}-slug`. Close with `Closes #$PR_NUMBER`.',
+    };
+    const prompt = bundle.buildGeneratorPrompt({
+      ...baseInput,
+      stage: toStageWorkflowStage(stage),
+    });
+    // Scope the no-literal check to the embedded stage-prompt block —
+    // the constraint text elsewhere in the prompt intentionally
+    // mentions `$ISSUE_NUMBER` by name ("do not replace it with
+    // $ISSUE_NUMBER") and that's fine.
+    const embedded = prompt.slice(
+      prompt.indexOf('BEGIN STAGE PROMPT'),
+      prompt.indexOf('END STAGE PROMPT'),
+    );
+    expect(embedded).not.toContain('$ISSUE_NUMBER');
+    expect(embedded).not.toContain('${ISSUE_NUMBER}');
+    expect(embedded).not.toContain('$PR_NUMBER');
+    expect(embedded).not.toContain('${PR_NUMBER}');
+    // The full GHA expression is present (at least once per original
+    // placeholder). We don't pin an exact count so future prompt
+    // authors can repeat the placeholder freely.
+    expect(embedded).toContain(
+      '${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }}',
+    );
+    // Hard constraint (i) tells the YAML-writer not to rewrite the
+    // expression. Lives in the constraints section, not the embed.
+    expect(prompt).toMatch(/Preserve every `\$\{\{ … }}` expression/);
+  });
+
+  it('substituteIssueNumberPlaceholders handles both $VAR and ${VAR} forms for issue and PR', () => {
+    // Focused unit test so a future change to the placeholder set can't
+    // silently regress — each variant must collapse to the same GHA
+    // expression. The \\b word-boundary rule matters: we don't want
+    // `$ISSUE_NUMBER_REAL` (hypothetical) to partially match.
+    const expr =
+      '${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }}';
+    expect(substituteIssueNumberPlaceholders('cmd $ISSUE_NUMBER arg')).toBe(
+      `cmd ${expr} arg`,
+    );
+    expect(substituteIssueNumberPlaceholders('cmd ${ISSUE_NUMBER} arg')).toBe(
+      `cmd ${expr} arg`,
+    );
+    expect(substituteIssueNumberPlaceholders('cmd $PR_NUMBER arg')).toBe(
+      `cmd ${expr} arg`,
+    );
+    expect(substituteIssueNumberPlaceholders('cmd ${PR_NUMBER} arg')).toBe(
+      `cmd ${expr} arg`,
+    );
+    // No-match strings round-trip unchanged.
+    expect(substituteIssueNumberPlaceholders('cmd NUM arg')).toBe('cmd NUM arg');
+    // Word boundary: `$ISSUE_NUMBER_SUFFIX` is not a placeholder.
+    expect(substituteIssueNumberPlaceholders('cmd $ISSUE_NUMBER_SUFFIX')).toBe(
+      'cmd $ISSUE_NUMBER_SUFFIX',
+    );
+  });
+
+  it('substitutes inside both reviewer and fixer prompts of a review-loop stage', () => {
+    const bundle = WORKFLOW_PROMPT_BUNDLES['claude-code'];
+    const loop: ReviewLoopStage = {
+      kind: 'review-loop',
+      id: 'review',
+      label: 'harnext:review',
+      maxIterations: 3,
+      review: { prompt: 'Review PR $PR_NUMBER on this repo.' },
+      fix: { prompt: 'Address review comments on #${PR_NUMBER}.' },
+      onExit: 'yolo',
+    };
+    const prompt = bundle.buildGeneratorPrompt({
+      ...baseInput,
+      stage: toStageWorkflowStage(loop),
+    });
+    expect(prompt).not.toContain('$PR_NUMBER');
+    expect(prompt).not.toContain('${PR_NUMBER}');
+    // Both the reviewer and fixer blocks should contain the substituted
+    // expression.
+    const expr =
+      '${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }}';
+    const reviewBlock = prompt.slice(
+      prompt.indexOf('BEGIN REVIEWER PROMPT'),
+      prompt.indexOf('END REVIEWER PROMPT'),
+    );
+    const fixBlock = prompt.slice(
+      prompt.indexOf('BEGIN FIXER PROMPT'),
+      prompt.indexOf('END FIXER PROMPT'),
+    );
+    expect(reviewBlock).toContain(expr);
+    expect(fixBlock).toContain(expr);
   });
 });
