@@ -12,7 +12,24 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { CodingAgentSpec } from './coding-agents.js';
 import type { AgentRunLogEvent, AgentRunResult } from './github-poller.js';
 
-/** 30 minutes — long enough for implementer stages, short enough to catch hangs. */
+/**
+ * Historical 30-minute cap — retained for back-compat. It is NOT applied
+ * by default anymore: the poller's lockfile is the real serializer (see
+ * `acquireLock` — atomic O_EXCL create + PID liveness check), so a
+ * long-running tick naturally blocks subsequent cron ticks from starting
+ * new work rather than getting SIGTERM'd mid-run.
+ *
+ * Live regression that drove this change: flowhunt PR #5339's verify
+ * tick hit exactly 1,800,481 ms (= `30 * 60 * 1000` + rounding) and the
+ * default timer SIGTERM'd the claude child right after it had posted
+ * the PASS comment but before the poller could transition the label.
+ * Every subsequent cron tick then saw the stale `harnext:verify` label
+ * and re-ran the whole 30-minute sequence.
+ *
+ * Callers who genuinely need a wall-clock ceiling (tests exercising the
+ * timeout path, paranoid CI usage) can still pass `timeoutMs` on the
+ * options bag — opt-in, not default-on.
+ */
 export const DEFAULT_EXTERNAL_AGENT_TIMEOUT_MS = 30 * 60 * 1000;
 
 export interface RunExternalCodingAgentOptions {
@@ -32,7 +49,12 @@ export interface RunExternalCodingAgentOptions {
    * it undefined and trust the agent's default.
    */
   maxTurns?: number;
-  /** Defaults to {@link DEFAULT_EXTERNAL_AGENT_TIMEOUT_MS}. */
+  /**
+   * Optional wall-clock SIGTERM deadline for the child. When unset (or
+   * zero), the child runs as long as it needs — the poller's lockfile
+   * prevents overlapping ticks, so we don't force-kill mid-run. Tests
+   * that exercise the timeout path still pass a small explicit value.
+   */
   timeoutMs?: number;
   /** Override for tests. Defaults to node:child_process `spawn`. */
   spawner?: ExternalAgentSpawner;
@@ -119,7 +141,12 @@ export async function runExternalCodingAgent(
   opts: RunExternalCodingAgentOptions,
 ): Promise<AgentRunResult> {
   const startedAt = Date.now();
-  const timeoutMs = opts.timeoutMs ?? DEFAULT_EXTERNAL_AGENT_TIMEOUT_MS;
+  // Opt-in timeout: a missing or zero `timeoutMs` means "let it run".
+  // The poller's lockfile serializes concurrent ticks, so we don't
+  // need a wall-clock ceiling here to prevent overlap — a long tick
+  // just blocks subsequent cron ticks until the child exits.
+  const timeoutMs =
+    opts.timeoutMs !== undefined && opts.timeoutMs > 0 ? opts.timeoutMs : 0;
   const spawner = opts.spawner ?? (spawn as unknown as ExternalAgentSpawner);
 
   const { binary, args } = buildExternalAgentArgv(spec, prompt, opts.modelId, {
@@ -166,10 +193,16 @@ export async function runExternalCodingAgent(
     let timedOut = false;
     let aborted = false;
 
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill('SIGTERM');
-    }, timeoutMs);
+    // `timeoutMs === 0` → no timer at all. We still declare `timer` as
+    // optional so the close/error handlers can call `clearTimeout` on it
+    // unconditionally; clearTimeout on undefined is a no-op.
+    const timer =
+      timeoutMs > 0
+        ? setTimeout(() => {
+            timedOut = true;
+            child.kill('SIGTERM');
+          }, timeoutMs)
+        : undefined;
 
     const onAbort = () => {
       aborted = true;

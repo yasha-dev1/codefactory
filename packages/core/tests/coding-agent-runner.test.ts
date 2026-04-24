@@ -211,4 +211,54 @@ describe('runExternalCodingAgent', () => {
     expect(result.exit).toBe(1);
     expect(result.error).toMatch(/timed out/);
   });
+
+  it('does NOT kill the child when timeoutMs is unset (lock is the serializer)', async () => {
+    // Regression: flowhunt's verify tick ran for ~30 min, hit the old
+    // 30-min default cap, got SIGTERM'd after it had already posted the
+    // PASS comment, and the resulting exit=1 prevented the label
+    // transition. Fix: timeout is opt-in now — no `timeoutMs` ⇒ no
+    // timer. The poller's lockfile prevents overlapping ticks from
+    // running concurrently, so we don't need a wall-clock kill to
+    // enforce mutual exclusion.
+    let killCount = 0;
+    const spawner: ExternalAgentSpawner = () => {
+      const child = makeFakeChild({ stdout: 'done', exitCode: 0, delayMs: 40 });
+      const originalKill = child.kill;
+      child.kill = ((signal?: NodeJS.Signals | number) => {
+        killCount += 1;
+        return originalKill.call(child, signal);
+      }) as ChildProcessWithoutNullStreams['kill'];
+      return child;
+    };
+    const result = await runExternalCodingAgent(claude, 'p', {
+      cwd: '/tmp',
+      modelId: 'm',
+      spawner,
+      // timeoutMs intentionally omitted
+    });
+    expect(result.exit).toBe(0);
+    expect(result.error).toBeUndefined();
+    expect(killCount).toBe(0);
+  });
+
+  it('treats timeoutMs=0 as disabled (same as unset)', async () => {
+    let killCount = 0;
+    const spawner: ExternalAgentSpawner = () => {
+      const child = makeFakeChild({ stdout: 'done', exitCode: 0, delayMs: 40 });
+      const originalKill = child.kill;
+      child.kill = ((signal?: NodeJS.Signals | number) => {
+        killCount += 1;
+        return originalKill.call(child, signal);
+      }) as ChildProcessWithoutNullStreams['kill'];
+      return child;
+    };
+    const result = await runExternalCodingAgent(claude, 'p', {
+      cwd: '/tmp',
+      modelId: 'm',
+      spawner,
+      timeoutMs: 0,
+    });
+    expect(result.exit).toBe(0);
+    expect(killCount).toBe(0);
+  });
 });
