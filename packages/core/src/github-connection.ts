@@ -228,7 +228,7 @@ export const DEFAULT_STAGES: StageEntry[] = [
     kind: 'normal',
     id: 'plan',
     label: 'harnext:plan',
-    mode: 'human-approval',
+    mode: 'yolo',
     prompt: [
       'Stage: plan.',
       '',
@@ -249,7 +249,7 @@ export const DEFAULT_STAGES: StageEntry[] = [
     kind: 'normal',
     id: 'implement',
     label: 'harnext:implement',
-    mode: 'human-approval',
+    mode: 'yolo',
     prompt: [
       'Stage: implement.',
       '',
@@ -292,7 +292,7 @@ export const DEFAULT_STAGES: StageEntry[] = [
         'Keep the scope tight: only fix what the review asked for.',
       ].join('\n'),
     },
-    onExit: 'human-approval',
+    onExit: 'yolo',
   },
   {
     kind: 'normal',
