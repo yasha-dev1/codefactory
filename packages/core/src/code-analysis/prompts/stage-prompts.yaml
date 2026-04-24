@@ -60,17 +60,36 @@ prompt: |
                        verbatim: "requires authenticated
                        workspace", "skipped: tool missing",
                        "change is too small/trivial to test",
-                       "no reproduction available". The skill
-                       runs headful against the user's real
-                       Chrome profile (auto-cloned) — no auth
-                       setup is needed.
-                    3. The prompt MUST demand that even a pure
-                       CSS / Tailwind / copy tweak produces a
-                       minimal scenario: navigate to a page
-                       containing the changed component, take
-                       one a11y snapshot, assert the component
-                       exists. Skipping is never acceptable on
-                       a UI-touching PR.
+                       "no reproduction available". When the
+                       app redirects to `/sign-in`, `/login`, or
+                       `/auth`, the prompt MUST tell the agent
+                       to log in with the init skill's documented
+                       test user (read it from
+                       `.claude/skills/init/SKILL.md`) before
+                       asserting — NOT accept the sign-in page
+                       as the scenario's end state. A run that
+                       ends on `/sign-in` and "passes" is a
+                       failure masquerading as a pass.
+                    3. The prompt MUST frame the scenario as
+                       verifying that the fix actually delivers
+                       what the LINKED ISSUE asked for — not as
+                       a health check. Explicitly:
+                         - Find the linked issue from `Closes #N`
+                           / `Fixes #N` in the PR body (fallback:
+                           `gh pr view <PR> --json closingIssuesReferences`)
+                           and read it.
+                         - Derive the assertion from the issue's
+                           behavior description + the PR diff
+                           (which DOM element, CSS class, route,
+                           or API call the change touches).
+                         - Forbid generic "body is visible" /
+                           "content length > 0" / "no crash"
+                           assertions. An assertion is acceptable
+                           only if it would FAIL on `origin/main`
+                           (pre-fix) and PASS on the PR branch —
+                           that contrast IS the point of verify.
+                       Skipping is never acceptable on a
+                       UI-touching PR.
                     4. The prompt MUST tell the agent to copy
                        the four artifacts (video, HAR, trace,
                        final screenshot) out of the ephemeral
@@ -93,8 +112,13 @@ prompt: |
                        fallback).
                     5. The prompt MUST FAIL the stage on any of:
                        non-zero exit from the skill, a new
-                       `pageErrors` entry (vs. main), or a
-                       failing scenario assertion.
+                       `pageErrors` entry (vs. main), a failing
+                       scenario assertion, OR the final
+                       scenario URL matching `/sign-in|/login|/auth`
+                       without an explicit login step earlier
+                       in the scenario (redirect to auth means
+                       the assertions ran against the wrong
+                       page).
                   For PRs that do NOT touch a UI path, skip
                   browser work — tests/lint/typecheck are enough.
                   The `chrome-devtools` MCP fallback is retired:
