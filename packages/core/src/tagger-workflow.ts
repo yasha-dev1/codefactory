@@ -22,6 +22,7 @@ import { dirname, isAbsolute, join } from 'node:path';
 import {
   AWAITING_APPROVAL_LABEL,
   NEEDS_JUDGMENT_LABEL,
+  getStageRunner,
   type GithubIssueFilter,
   type StageEntry,
 } from './github-connection.js';
@@ -36,6 +37,11 @@ export interface BuildTaggerWorkflowInput {
   filter: GithubIssueFilter;
 }
 
+/** Convention for the first-stage workflow filename, matching the setup wizard. */
+function firstStageWorkflowFilename(firstStage: StageEntry): string {
+  return `harnext-${firstStage.id}.yml`;
+}
+
 /**
  * Render the tagger workflow YAML as a string. Pure — no filesystem
  * side effects, safe to snapshot-test.
@@ -44,6 +50,15 @@ export function buildTaggerWorkflow(input: BuildTaggerWorkflowInput): string {
   const firstLabel = input.firstStage.label;
   const filterStep = filterStepBody(input.filter);
   const filterSummary = filterSummary_(input.filter);
+  // When the first stage runs on GitHub Actions, applying its label
+  // via GITHUB_TOKEN does NOT fire the stage workflow's
+  // `issues.labeled` trigger — GitHub suppresses those to avoid
+  // infinite loops. The tagger must explicitly dispatch the first
+  // stage's workflow via `gh workflow run`. When the first stage runs
+  // locally, we skip the dispatch (the cron poller picks up by label).
+  const firstStageRunner = getStageRunner(input.firstStage);
+  const dispatchFirstStage = firstStageRunner.kind === 'github-actions';
+  const firstStageFilename = firstStageWorkflowFilename(input.firstStage);
 
   return [
     `# harnext tagger — bootstraps new issues into the pipeline.`,
@@ -68,6 +83,10 @@ export function buildTaggerWorkflow(input: BuildTaggerWorkflowInput): string {
     `    runs-on: ubuntu-latest`,
     `    permissions:`,
     `      issues: write`,
+    // `actions: write` is only needed when we dispatch the first
+    // stage's workflow. Keep the grant narrow for the local-first-stage
+    // case so the tagger's token footprint stays minimal.
+    ...(dispatchFirstStage ? [`      actions: write`] : []),
     `    steps:`,
     `      - name: Skip if the issue is already in the harnext pipeline`,
     `        id: gate`,
@@ -106,6 +125,23 @@ export function buildTaggerWorkflow(input: BuildTaggerWorkflowInput): string {
     `          gh issue edit "\${{ github.event.issue.number }}" \\`,
     `            --repo "\${{ github.repository }}" \\`,
     `            --add-label "${firstLabel}"`,
+    ...(dispatchFirstStage
+      ? [
+          ``,
+          `      - name: Dispatch first-stage workflow`,
+          `        if: steps.filter.outputs.matches == 'true'`,
+          `        env:`,
+          `          GH_TOKEN: \${{ secrets.GITHUB_TOKEN }}`,
+          `        run: |`,
+          `          set -euo pipefail`,
+          `          # Label-add via GITHUB_TOKEN does not fire \`issues.labeled\`,`,
+          `          # so the first stage's workflow will not auto-trigger from`,
+          `          # the label alone. Dispatch it explicitly via workflow_dispatch.`,
+          `          gh workflow run "${firstStageFilename}" \\`,
+          `            --repo "\${{ github.repository }}" \\`,
+          `            --field issue_number="\${{ github.event.issue.number }}"`,
+        ]
+      : []),
     ``,
   ].join('\n');
 }

@@ -680,7 +680,17 @@ async function runRunnersStep(
 
   for (let i = 0; i < stages.length; i += 1) {
     const stage = stages[i];
-    const nextLabel = stages[i + 1]?.label;
+    const nextStage = stages[i + 1];
+    const nextLabel = nextStage?.label;
+    // Terminal mode for this stage: normal stages use `mode`, review-loop
+    // stages use `onExit`. We only bake a dispatch hint into the generated
+    // workflow for yolo transitions — human-approval hands off to a
+    // human so no automatic next-stage firing is wanted.
+    const exitMode = stage.kind === 'review-loop' ? stage.onExit : stage.mode;
+    const nextWorkflowFilename =
+      exitMode === 'yolo' && nextStage
+        ? basename(defaultWorkflowPath(nextStage.id))
+        : undefined;
     console.log();
     console.log(
       chalk.bold(`  Stage ${i + 1}: `) +
@@ -802,6 +812,7 @@ async function runRunnersStep(
         nextLabel,
         awaitingLabel: AWAITING_APPROVAL_LABEL,
         needsJudgmentLabel: NEEDS_JUDGMENT_LABEL,
+        nextWorkflowFilename,
         triggerOn: 'both',
       });
       if (!result.wroteFile || !result.workflowContent) {

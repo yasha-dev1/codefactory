@@ -45,6 +45,22 @@ export interface StageWorkflowInput {
   /** Always `harnext:needs-judgment`. */
   needsJudgmentLabel: string;
   /**
+   * Filename (basename) of the next stage's workflow to dispatch via
+   * `gh workflow run` after this stage adds the next-stage label.
+   *
+   * Why this exists: GitHub suppresses `labeled` events when the label
+   * was added via `GITHUB_TOKEN` (infinite-loop guard), so a yolo
+   * chain from one generated workflow to another *will not advance*
+   * on label-add alone. The current workflow must explicitly dispatch
+   * the next one.
+   *
+   * Absent when: this is a terminal stage, the current stage is
+   * human-approval (transition goes to awaiting-approval, not next
+   * stage), or the next stage runs locally (the cron poller will pick
+   * up the label on its next tick).
+   */
+  nextWorkflowFilename?: string;
+  /**
    * Which event the workflow should trigger on. `issues` for issue-only
    * stages (triage, plan), `pull_request` for PR-only stages (verify,
    * review), `both` when the stage can fire for either (implement during
@@ -268,10 +284,18 @@ jobs:
           NUM: \${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }}
         run: |
           gh api -X DELETE repos/\${{ github.repository }}/issues/$NUM/labels/harnext:<STAGE_ID>
-          # then gh api -X POST ... to add <NEXT_LABEL> or <AWAITING_LABEL>.
-          # If chaining to another workflow via \`gh workflow run\`, prefer
-          # that over label-add, because label-add by GITHUB_TOKEN does NOT
-          # fire \`labeled\` events.
+          # For a yolo chain: add <NEXT_LABEL> AND dispatch the next
+          # workflow. Label-add alone is NOT enough — labels added via
+          # GITHUB_TOKEN do not fire \`labeled\` events, so the next
+          # workflow's \`issues.labeled\` trigger stays silent and the
+          # chain stalls. The \`|| true\` tolerates the case where the
+          # next stage is actually local (no workflow file exists).
+          gh api -X POST repos/\${{ github.repository }}/issues/$NUM/labels \\
+            -f labels[]=<NEXT_LABEL>
+          gh workflow run <NEXT_WORKFLOW_FILENAME> \\
+            --field issue_number=$NUM || true
+          # For human-approval mode: add <AWAITING_LABEL> and stop —
+          # no dispatch, a human owns the next move.
       - name: Park on needs-judgment on failure
         if: failure()
         env:
@@ -290,6 +314,19 @@ jobs:
 
 function buildClaudeCodePrompt(input: StageWorkflowInput): string {
   const tools = claudeCodeToolAllowlist(input.stage.id);
+  const dispatchConstraint = input.nextWorkflowFilename
+    ? [
+        `  h) After adding \`${input.nextLabel}\` on a successful yolo chain,`,
+        '     you MUST also dispatch the next workflow:',
+        `       gh workflow run ${input.nextWorkflowFilename} --field issue_number=$NUM || true`,
+        '     Label-add alone is not enough — GitHub suppresses `labeled`',
+        '     events for labels added via GITHUB_TOKEN, so the next',
+        `     workflow (${input.nextWorkflowFilename}) will never fire without`,
+        '     an explicit dispatch. The `|| true` tolerates the case where the',
+        '     next stage is actually local on the user\'s machine — the file',
+        '     simply does not exist and the cron poller picks up by label.',
+      ].join('\n')
+    : null;
   return [
     'You are generating a GitHub Actions workflow for a single stage of a harnext pipeline.',
     'The workflow will run claude-code (the `anthropics/claude-code-action@v1` action) against a PR or issue.',
@@ -329,6 +366,7 @@ function buildClaudeCodePrompt(input: StageWorkflowInput): string {
     '  g) Job permissions must cover what this stage does: at minimum `issues: write`,',
     '     `contents: read` (or `write` for stages that push), `actions: write` when the',
     '     stage dispatches another workflow, and `id-token: write` for OAuth exchange.',
+    ...(dispatchConstraint ? [dispatchConstraint] : []),
     '',
     'Use the GH_TOKEN from secrets.GITHUB_TOKEN for label transitions and gh CLI calls.',
     '',

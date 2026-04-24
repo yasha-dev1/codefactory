@@ -295,4 +295,36 @@ describe('WORKFLOW_PROMPT_BUNDLES', () => {
     });
     expect(prompt).toMatch(/terminal stage/i);
   });
+
+  it('claude-code prompt mandates a workflow_dispatch of the next stage when nextWorkflowFilename is set', () => {
+    // Labels added via GITHUB_TOKEN do NOT fire `labeled` events, so a
+    // yolo chain between two github-actions stages stalls unless the
+    // current workflow explicitly dispatches the next one via
+    // `gh workflow run`. Caught live on flowhunt's triage → plan
+    // handoff (issue #5336) — plan was skipped until this landed.
+    const bundle = WORKFLOW_PROMPT_BUNDLES['claude-code'];
+    const prompt = bundle.buildGeneratorPrompt({
+      ...baseInput,
+      nextWorkflowFilename: 'harnext-plan.yml',
+      stage: toStageWorkflowStage(DEFAULT_STAGES[0] as NormalStage),
+    });
+    expect(prompt).toMatch(/gh workflow run harnext-plan\.yml/);
+    expect(prompt).toMatch(/--field issue_number=\$NUM/);
+    // The rationale must travel with the constraint so the agent
+    // doesn't optimize it out.
+    expect(prompt).toMatch(/GITHUB_TOKEN/);
+    expect(prompt).toMatch(/labeled/);
+  });
+
+  it('claude-code prompt omits the dispatch constraint when nextWorkflowFilename is absent', () => {
+    // Human-approval, terminal, and local-next-stage cases all arrive
+    // here with no nextWorkflowFilename. The prompt must not fabricate
+    // one — there is nothing to dispatch.
+    const bundle = WORKFLOW_PROMPT_BUNDLES['claude-code'];
+    const prompt = bundle.buildGeneratorPrompt({
+      ...baseInput,
+      stage: toStageWorkflowStage(DEFAULT_STAGES[0] as NormalStage),
+    });
+    expect(prompt).not.toMatch(/gh workflow run harnext-/);
+  });
 });
