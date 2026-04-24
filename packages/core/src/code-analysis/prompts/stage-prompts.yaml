@@ -71,14 +71,26 @@ prompt: |
                        one a11y snapshot, assert the component
                        exists. Skipping is never acceptable on
                        a UI-touching PR.
-                    4. The prompt MUST tell the agent to cite
-                       the three artifact paths produced by the
-                       skill in the final PR comment:
-                         `.harnext/browser-verify/<runId>/video/recording.webm`
-                         `.harnext/browser-verify/<runId>/network.har`
-                         `.harnext/browser-verify/<runId>/trace.zip`
-                       (paths come from the skill's JSON
-                       output — cite verbatim, don't invent).
+                    4. The prompt MUST tell the agent to copy
+                       the four artifacts (video, HAR, trace,
+                       final screenshot) out of the ephemeral
+                       worktree into `~/harnext-artifacts/<runId>/`
+                       — a NON-HIDDEN path. Do NOT use
+                       `~/.harnext/artifacts/...`: snap-confined
+                       viewers (VLC snap, Firefox snap) can't
+                       open files under dot-directories, so the
+                       PR comment's cited paths must resolve.
+                       The prompt MUST also instruct the agent
+                       to run ffmpeg (libx264, veryfast, crf 23)
+                       as a fallback to convert `recording.webm`
+                       → `recording.mp4` if the skill didn't
+                       already produce an mp4 — Playwright's
+                       webm has stream-level `duration=N/A`
+                       which the VLC snap refuses to play. The
+                       final PR comment cites whichever file
+                       actually exists on disk (`.mp4` when
+                       conversion succeeded, `.webm` only as
+                       fallback).
                     5. The prompt MUST FAIL the stage on any of:
                        non-zero exit from the skill, a new
                        `pageErrors` entry (vs. main), or a
