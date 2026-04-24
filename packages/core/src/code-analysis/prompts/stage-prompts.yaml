@@ -35,6 +35,17 @@ prompt: |
     - verify    : check out the PR branch, run tests / lint /
                   typecheck, post one PR comment with exit codes.
                   Commit mechanical fixes only.
+                  The prompt MUST instruct the agent to post a
+                  stub "running" comment to the PR before any
+                  gates/browser work begins (capture its id via
+                  `gh api -X POST .../issues/<pr>/comments -q .id`)
+                  and to UPDATE that comment in place at the end
+                  (`gh api -X PATCH .../issues/comments/<id>
+                  --field body=@<path>`). Do NOT create a second
+                  comment on completion. This makes in-flight
+                  runs visible on the PR and keeps the discussion
+                  tidy — a verify run is 10–15 min and without
+                  this pattern the PR looks idle the whole time.
                   **UI verification is MANDATORY** when any
                   TechStack package has `hasUI: true` AND the PR
                   diff (`gh pr diff --name-only`) touches a file
