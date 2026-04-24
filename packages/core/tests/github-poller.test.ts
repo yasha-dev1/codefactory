@@ -273,6 +273,50 @@ describe('buildStagePrompt', () => {
     expect(out).toContain('(empty)');
     expect(out).toContain('(no labels)');
   });
+
+  it('substitutes $ISSUE_NUMBER / $PR_NUMBER / braced variants with the real item number', () => {
+    // Live bug: flowhunt's verify stage's stored prompt used
+    // `$PR_NUMBER` (and `$ISSUE_NUMBER` in earlier stages) as if it
+    // were a shell variable. When the local poller spawns claude
+    // directly via argv, there is no shell expansion — so the agent
+    // got literal `$PR_NUMBER` text. Substitution here makes the
+    // placeholders plain-text numbers before the prompt is handed
+    // to the subprocess.
+    const item = makeItem({ number: 5339 });
+    const withPlaceholders: StageDefinition = {
+      id: 'verify',
+      label: 'harnext:verify',
+      mode: 'yolo',
+      prompt:
+        'Verify PR #$PR_NUMBER. Checkout: `gh pr checkout $PR_NUMBER`. ' +
+        'Branch: `issue/${ISSUE_NUMBER}`. Close with #${PR_NUMBER}.',
+    };
+    const out = buildStagePrompt(withPlaceholders, item);
+    // No literal placeholders survive anywhere in the output.
+    expect(out).not.toContain('$PR_NUMBER');
+    expect(out).not.toContain('${PR_NUMBER}');
+    expect(out).not.toContain('$ISSUE_NUMBER');
+    expect(out).not.toContain('${ISSUE_NUMBER}');
+    // All four placeholder sites should have resolved to the number.
+    expect(out).toContain('Verify PR #5339.');
+    expect(out).toContain('gh pr checkout 5339');
+    expect(out).toContain('Branch: `issue/5339`');
+    expect(out).toContain('Close with #5339.');
+  });
+
+  it('leaves similar-but-non-placeholder text alone (word-boundary on bare $VAR)', () => {
+    // `$ISSUE_NUMBER_SUFFIX` must NOT partial-match.
+    const item = makeItem({ number: 42 });
+    const stage: StageDefinition = {
+      id: 'verify',
+      label: 'harnext:verify',
+      mode: 'yolo',
+      prompt: 'Keep $ISSUE_NUMBER_SUFFIX untouched; resolve $PR_NUMBER only.',
+    };
+    const out = buildStagePrompt(stage, item);
+    expect(out).toContain('$ISSUE_NUMBER_SUFFIX untouched');
+    expect(out).toContain('resolve 42 only');
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────

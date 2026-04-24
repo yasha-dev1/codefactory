@@ -325,6 +325,35 @@ export async function detectOpenedPr(
  * carry their prompts under `.review.prompt` / `.fix.prompt`) can reuse the
  * same context composition without needing a full `NormalStage` shell.
  */
+/**
+ * Resolve `$ISSUE_NUMBER` / `${ISSUE_NUMBER}` / `$PR_NUMBER` /
+ * `${PR_NUMBER}` placeholders in a stage prompt to the actual item
+ * number as a plain-text replacement.
+ *
+ * Why: stage prompts are authored as human-readable Markdown with
+ * shell-style placeholders. When the poller runs the external agent
+ * (claude/codex) directly via `argv`, there is no shell to expand
+ * `$VAR`, and `composeStagePrompt` does not inject an env block the
+ * agent's Bash tool can reach. Every local run therefore hit the
+ * same trap the GHA path hit — the agent saw `gh pr checkout
+ * $PR_NUMBER` literal text and either skipped the call or ran it
+ * against nothing.
+ *
+ * The GHA path has its own sibling helper
+ * (`substituteIssueNumberPlaceholders` in workflow-prompts.ts) that
+ * swaps in a GitHub Actions expression instead of a plain number —
+ * the same regex, different replacement. Two helpers rather than one
+ * to keep each site's substitution self-documenting.
+ */
+function substituteItemNumberPlaceholders(prompt: string, number: number): string {
+  const n = String(number);
+  return prompt
+    .replace(/\$\{ISSUE_NUMBER\}/g, n)
+    .replace(/\$ISSUE_NUMBER\b/g, n)
+    .replace(/\$\{PR_NUMBER\}/g, n)
+    .replace(/\$PR_NUMBER\b/g, n);
+}
+
 export function composeStagePrompt(
   promptText: string,
   item: GithubIssueItem,
@@ -352,7 +381,7 @@ export function composeStagePrompt(
     item.body && item.body.trim().length > 0 ? item.body : '(empty)',
   ].join('\n');
 
-  return [promptText, '', context].join('\n');
+  return [substituteItemNumberPlaceholders(promptText, item.number), '', context].join('\n');
 }
 
 export function buildStagePrompt(
