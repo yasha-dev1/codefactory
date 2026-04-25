@@ -315,6 +315,14 @@ export {
 } from './ollama.js';
 
 export {
+  NVIDIA_BASE_URL,
+  NVIDIA_DEFAULT_MODEL,
+  buildNvidiaModel,
+  listNvidiaModels,
+  type NvidiaModelSummary,
+} from './nvidia.js';
+
+export {
   loadPreferences,
   savePreferences,
   setDefaultProvider,
