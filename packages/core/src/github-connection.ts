@@ -38,21 +38,21 @@ export type GithubIssueFilter =
 export type StageMode = 'yolo' | 'human-approval';
 
 /**
- * Where a stage executes. `local` runs through the cron-driven poller on the
- * user's machine; `github-actions` hands the stage off to a generated (or
- * user-connected) workflow file that owns the entire lifecycle — agent
- * invocation, label transition, PR handoff, needs-judgment on failure. The
- * poller skips GHA-marked stages entirely so there is exactly one writer per
- * label boundary.
+ * Where a workflow's job is scheduled.
+ *  - `github-hosted`: runs on a fresh ubuntu-latest VM provisioned by GitHub.
+ *  - `self-hosted`:   runs on a self-hosted runner the user has registered
+ *    against this repo. Workflows target it via a project-scoped label
+ *    (`harnext-<projectHash>`) so cross-project runners can never poach
+ *    each other's jobs.
  */
-export type StageRunnerKind = 'local' | 'github-actions';
+export type RunsOn = 'github-hosted' | 'self-hosted';
 
-export interface LocalRunner {
-  kind: 'local';
-}
-
-export interface GithubActionsRunner {
-  kind: 'github-actions';
+/**
+ * A stage runner — every stage is backed by a GitHub Actions workflow
+ * file. The only thing that varies is whether the workflow targets a
+ * GitHub-hosted runner or a self-hosted one on the user's PC.
+ */
+export interface StageRunner {
   /** Repo-relative path, e.g. '.github/workflows/harnext-triage.yml'. */
   workflowPath: string;
   /**
@@ -62,9 +62,9 @@ export interface GithubActionsRunner {
    * authored vs. what they wrote themselves.
    */
   origin: 'connected' | 'generated';
+  /** Where the workflow's job actually runs. */
+  runsOn: RunsOn;
 }
-
-export type StageRunner = LocalRunner | GithubActionsRunner;
 
 /**
  * A plain single-run stage — the traditional shape. `kind` is optional so
@@ -82,9 +82,10 @@ export interface NormalStage {
   /** How to advance the workflow once the agent finishes. */
   mode: StageMode;
   /**
-   * Where this stage runs. Absent = local (back-compat for every
-   * github.json written before runner existed). Use `getStageRunner` to
-   * read this safely.
+   * The workflow file + runner-target for this stage. Required in current
+   * configs; legacy configs that omit it (or carry the historical
+   * `{ kind: 'local' }` shape) are migrated at load time — see
+   * `migrateLegacyStageRunner`.
    */
   runner?: StageRunner;
 }
@@ -115,43 +116,104 @@ export interface ReviewLoopStage {
    */
   onExit: StageMode;
   /**
-   * Where the review↔fix loop runs. Absent = local. When `github-actions`,
-   * the entire loop executes inside a single Actions run; see workflow
-   * generator docs for the maxIterations caveat.
+   * Workflow file + runner-target for the loop. Same migration story as
+   * NormalStage.runner — required in current configs; legacy configs go
+   * through `migrateLegacyStageRunner` at load time.
    */
   runner?: StageRunner;
 }
 
 /**
- * Resolve a stage's runner, defaulting to local when the field is absent so
- * existing configs (and stage definitions that omit `runner`) keep working
- * without migration.
+ * The default stage-runner shape used when migrating legacy configs that
+ * carry `{ kind: 'local' }` or omit the runner entirely. Self-hosted is the
+ * spiritual replacement for the old "local" runner — it still runs on the
+ * user's machine, but via a registered actions/runner instead of cron. The
+ * workflowPath is a placeholder so the wizard's first edit pass can
+ * generate the file; runtime code paths should never see this value.
+ */
+export const LEGACY_RUNNER_FALLBACK: StageRunner = {
+  workflowPath: '',
+  origin: 'generated',
+  runsOn: 'self-hosted',
+};
+
+/**
+ * Default workflow path harnext writes for a stage when generating one
+ * fresh — `.github/workflows/harnext-<id>.yml`. Exposed so the wizard and
+ * setup callers stay in sync without duplicating the convention.
+ */
+export function defaultStageWorkflowPath(stageId: string): string {
+  return `.github/workflows/harnext-${stageId}.yml`;
+}
+
+/**
+ * Resolve a stage's runner. Required in current configs; legacy configs
+ * (`{ kind: 'local' }`, or runner absent) fall back to a self-hosted
+ * default with the conventional workflow path so callers don't have to
+ * scatter migration code.
  */
 export function getStageRunner(stage: StageEntry): StageRunner {
-  return stage.runner ?? { kind: 'local' };
+  if (stage.runner) return stage.runner;
+  return { ...LEGACY_RUNNER_FALLBACK, workflowPath: defaultStageWorkflowPath(stage.id) };
+}
+
+/**
+ * Migrate a legacy `runner` value into the new shape. Called from
+ * `loadGithubConnection`. Returns `undefined` when the legacy value is
+ * unrecoverable so the caller can refuse the load.
+ */
+export function migrateLegacyStageRunner(
+  raw: unknown,
+  stageId: string,
+): StageRunner | undefined {
+  if (raw === undefined) {
+    return { ...LEGACY_RUNNER_FALLBACK, workflowPath: defaultStageWorkflowPath(stageId) };
+  }
+  if (!raw || typeof raw !== 'object') return undefined;
+  const r = raw as Record<string, unknown>;
+  if (
+    typeof r.workflowPath === 'string' &&
+    (r.origin === 'connected' || r.origin === 'generated') &&
+    (r.runsOn === 'github-hosted' || r.runsOn === 'self-hosted')
+  ) {
+    return { workflowPath: r.workflowPath, origin: r.origin, runsOn: r.runsOn };
+  }
+  if (r.kind === 'local') {
+    return { ...LEGACY_RUNNER_FALLBACK, workflowPath: defaultStageWorkflowPath(stageId) };
+  }
+  if (r.kind === 'github-actions') {
+    if (typeof r.workflowPath !== 'string' || r.workflowPath.length === 0) return undefined;
+    if (r.origin !== 'connected' && r.origin !== 'generated') return undefined;
+    return {
+      workflowPath: r.workflowPath,
+      origin: r.origin,
+      runsOn: 'github-hosted',
+    };
+  }
+  return undefined;
 }
 
 export type StageEntry = NormalStage | ReviewLoopStage;
 
 /**
  * Stage 0: the mandatory intake step. When a new issue arrives with no
- * harnext label, *someone* has to tag it with the first real stage's label
- * so the pipeline can take over. Intake picks who that someone is:
- *   - `local`: the cron poller auto-labels on its next tick (historical default).
- *   - `github-actions`: the generated tagger workflow listens for issue events
- *     and applies the first stage's label. The poller stays out of it, so the
- *     pipeline can run entirely without a local runner.
- *
- * Intake runs no agent, has no prompt, and owns no label of its own — it
- * only decides *where* the first-label-apply happens. That's why it lives
- * outside the `stages[]` array (which is strictly agent-running stages).
+ * harnext label, the generated `harnext-tagger.yml` workflow listens for
+ * issue events and applies the first stage's label, then dispatches the
+ * first stage's workflow. Intake exists as its own config field so users
+ * can opt out (e.g. they want to label issues by hand) without dropping
+ * the rest of the pipeline.
  */
 export interface IntakeStage {
-  runner: StageRunner;
+  /**
+   * Whether to write the harnext-tagger workflow that auto-labels new
+   * issues with the first stage's label. When false, humans add the
+   * first label manually and the pipeline picks up from there.
+   */
+  enabled: boolean;
 }
 
 /** Default intake shape used when a config is written or loaded without one. */
-export const DEFAULT_INTAKE: IntakeStage = { runner: { kind: 'local' } };
+export const DEFAULT_INTAKE: IntakeStage = { enabled: true };
 
 /**
  * Back-compat alias: existing call sites referring to `StageDefinition`
@@ -162,30 +224,29 @@ export type StageDefinition = NormalStage;
 export interface GithubConnectionConfig {
   /** GitHub repository in "owner/name" form. */
   repo: string;
-  /** Polling interval in minutes. */
+  /**
+   * Historical poll interval, retained on the config shape for round-trip
+   * stability with older saves. The cron poller is gone — workflows are
+   * event-driven now — so this value is not consulted at runtime.
+   */
   pollIntervalMinutes: GithubPollIntervalMinutes;
   /** Optional filter used when selecting which issues the agent picks up. */
   filter: GithubIssueFilter;
   /**
-   * Stage 0 — the intake runner that pulls fresh issues into the pipeline by
-   * applying the first stage's label. Mandatory. Absent in older configs;
-   * `loadGithubConnection` fills in `DEFAULT_INTAKE` (local) so pre-intake
-   * setups keep their previous behavior.
+   * Stage 0 — whether the harnext-tagger workflow auto-labels new issues
+   * with the first stage's label. `loadGithubConnection` fills in
+   * `DEFAULT_INTAKE` (enabled) when the field is missing or carries the
+   * legacy `{ runner }` shape.
    */
   intake: IntakeStage;
   /**
-   * Ordered list of workflow stages. The poller treats `stages[i+1]` as the
-   * "next" stage for YOLO chaining, so order matters. Entries are a union of
-   * `NormalStage` (the traditional single-run stage) and `ReviewLoopStage`
-   * (a review ↔ fix loop with verdict-driven termination).
+   * Ordered list of workflow stages. `stages[i+1]` is the "next" stage for
+   * YOLO chaining, so order matters. Entries are a union of `NormalStage`
+   * (single-run) and `ReviewLoopStage` (review↔fix loop with verdict-driven
+   * termination). Each stage is backed by a generated or user-connected
+   * GitHub Actions workflow file — see `StageRunner`.
    */
   stages: StageEntry[];
-  /**
-   * Pointer for incremental polling (ISO 8601). First tick writes `now()`.
-   * Advanced per-item even on agent failure so a broken issue does not block
-   * the queue.
-   */
-  lastSeenUpdatedAt?: string;
   /**
    * Which coding agent runs the pipeline for this project. Defaults to
    * `harnext` for configs written before this field existed.
@@ -315,34 +376,12 @@ export function getGithubConfigPath(cwd: string): string {
   return join(getProjectStateDir(cwd), GITHUB_CONFIG_FILE);
 }
 
-/**
- * Validate a raw `runner` sub-object. Absent is allowed (caller treats it as
- * local). A present value must be one of the two discriminated shapes with
- * the right field types — anything else is rejected so a typo doesn't
- * silently resolve to local and mask the error.
- */
-function isValidStageRunner(x: unknown): boolean {
-  if (x === undefined) return true;
-  if (!x || typeof x !== 'object') return false;
-  const r = x as Record<string, unknown>;
-  if (r.kind === 'local') return true;
-  if (r.kind === 'github-actions') {
-    return (
-      typeof r.workflowPath === 'string' &&
-      r.workflowPath.length > 0 &&
-      (r.origin === 'connected' || r.origin === 'generated')
-    );
-  }
-  return false;
-}
-
 function isValidNormalStageShape(x: Record<string, unknown>): boolean {
   return (
     typeof x.id === 'string' &&
     typeof x.label === 'string' &&
     typeof x.prompt === 'string' &&
-    (x.mode === 'yolo' || x.mode === 'human-approval') &&
-    isValidStageRunner(x.runner)
+    (x.mode === 'yolo' || x.mode === 'human-approval')
   );
 }
 
@@ -358,42 +397,46 @@ function isValidReviewLoopStageShape(x: Record<string, unknown>): boolean {
     !!review &&
     typeof review.prompt === 'string' &&
     !!fix &&
-    typeof fix.prompt === 'string' &&
-    isValidStageRunner(x.runner)
+    typeof fix.prompt === 'string'
   );
 }
 
-/**
- * Validate a parsed `intake` object. Absent is allowed (caller fills in
- * DEFAULT_INTAKE). A present value must carry a valid runner — a bad
- * runner is rejected rather than silently downgraded to local so the user
- * sees the typo.
- */
-function isValidIntake(x: unknown): boolean {
-  if (x === undefined) return true;
-  if (!x || typeof x !== 'object') return false;
-  return isValidStageRunner((x as Record<string, unknown>).runner);
-}
-
-function isValidStageEntry(x: unknown): x is StageEntry {
+function isValidStageShape(x: unknown): boolean {
   if (!x || typeof x !== 'object') return false;
   const s = x as Record<string, unknown>;
-  // `kind` absent or 'normal' → validate as a NormalStage (back-compat for
-  // pre-union configs). 'review-loop' → validate the loop shape. Any other
-  // explicit kind is rejected.
   if (s.kind === 'review-loop') return isValidReviewLoopStageShape(s);
   if (s.kind === undefined || s.kind === 'normal') return isValidNormalStageShape(s);
   return false;
 }
 
 /**
- * Normalize a validated stage entry before handing it to callers — fills in
- * `kind: 'normal'` on pre-union configs so downstream code can always rely on
- * the discriminator being present.
+ * Normalize a validated raw stage entry into the modern `StageEntry`
+ * shape: fills in `kind: 'normal'` on pre-union configs and migrates the
+ * legacy `runner` shape into the new `{ workflowPath; origin; runsOn }`
+ * model.
  */
-function normalizeStageEntry(s: StageEntry): StageEntry {
-  if (s.kind === 'review-loop') return s;
-  return { ...s, kind: 'normal' };
+function normalizeStageEntry(raw: Record<string, unknown>): StageEntry | undefined {
+  const stageIdValue = typeof raw.id === 'string' ? raw.id : undefined;
+  if (!stageIdValue) return undefined;
+  const runner = migrateLegacyStageRunner(raw.runner, stageIdValue);
+  if (!runner) return undefined;
+  if (raw.kind === 'review-loop') {
+    return { ...(raw as unknown as ReviewLoopStage), runner };
+  }
+  return { ...(raw as unknown as NormalStage), kind: 'normal', runner };
+}
+
+/**
+ * Migrate a legacy `intake` value into the new `{ enabled }` shape. Old
+ * configs carried `intake: { runner: { kind: 'local' | 'github-actions' } }`
+ * — both meant "auto-tag new issues", so both round-trip to enabled=true.
+ */
+function migrateLegacyIntake(raw: unknown): IntakeStage {
+  if (!raw || typeof raw !== 'object') return DEFAULT_INTAKE;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.enabled === 'boolean') return { enabled: r.enabled };
+  if (r.runner !== undefined) return { enabled: true };
+  return DEFAULT_INTAKE;
 }
 
 export function loadGithubConnection(cwd: string): GithubConnectionConfig | null {
@@ -410,23 +453,15 @@ export function loadGithubConnection(cwd: string): GithubConnectionConfig | null
       return null;
     }
 
-    if (!isValidIntake((parsed as { intake?: unknown }).intake)) return null;
+    let stages: StageEntry[] = DEFAULT_STAGES;
+    if (Array.isArray(parsed.stages) && parsed.stages.every(isValidStageShape)) {
+      const normalized = (parsed.stages as unknown[])
+        .map((raw) => normalizeStageEntry(raw as Record<string, unknown>))
+        .filter((s): s is StageEntry => s !== undefined);
+      if (normalized.length === parsed.stages.length) stages = normalized;
+    }
 
-    // Backfill: configs written before the stages field existed default to
-    // DEFAULT_STAGES so existing setups keep working without manual editing.
-    // Also normalizes each entry so the `kind` discriminator is always set.
-    const stages =
-      Array.isArray(parsed.stages) && parsed.stages.every(isValidStageEntry)
-        ? (parsed.stages as StageEntry[]).map(normalizeStageEntry)
-        : DEFAULT_STAGES;
-
-    // Backfill: configs written before the intake field existed default to
-    // local — matches the pre-intake behavior where the poller did the
-    // auto-labeling itself.
-    const intake: IntakeStage =
-      parsed.intake && typeof parsed.intake === 'object'
-        ? { runner: (parsed.intake as IntakeStage).runner ?? { kind: 'local' } }
-        : DEFAULT_INTAKE;
+    const intake = migrateLegacyIntake(parsed.intake);
 
     const codingAgent: CodingAgentId = isCodingAgentId(parsed.codingAgent)
       ? parsed.codingAgent
@@ -442,9 +477,6 @@ export function loadGithubConnection(cwd: string): GithubConnectionConfig | null
       filter: parsed.filter as GithubIssueFilter,
       intake,
       stages,
-      lastSeenUpdatedAt: typeof parsed.lastSeenUpdatedAt === 'string'
-        ? parsed.lastSeenUpdatedAt
-        : undefined,
       codingAgent,
       codingAgentModel,
       updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : Date.now(),
