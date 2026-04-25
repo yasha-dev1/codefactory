@@ -61,12 +61,17 @@ export interface StageWorkflowInput {
    */
   nextWorkflowFilename?: string;
   /**
-   * Which event the workflow should trigger on. `issues` for issue-only
-   * stages (triage, plan), `pull_request` for PR-only stages (verify,
-   * review), `both` when the stage can fire for either (implement during
-   * local→PR handoff).
+   * Which event the workflow should trigger on.
+   *  - `issues` for issue-only stages (triage, plan)
+   *  - `pull_request` for PR-only stages (verify, review)
+   *  - `both` when the stage can fire for either (implement during
+   *    issue→PR handoff)
+   *  - `pr-merged` for terminal post-merge stages (doc-gardening) that
+   *    fire on `pull_request.closed` filtered to `merged == true`. These
+   *    stages have no label cascade — no transitions, no PR handoff,
+   *    no next-stage dispatch.
    */
-  triggerOn: 'issues' | 'pull_request' | 'both';
+  triggerOn: 'issues' | 'pull_request' | 'both' | 'pr-merged';
   /** The coding agent that will run inside the workflow (same binary as the bundle). */
   codingAgent: CodingAgentId;
   /** Model id if the agent needs one (claude-code, codex). */
@@ -122,6 +127,18 @@ function transitionSpec(input: StageWorkflowInput): string {
     return input.phase === 'fix'
       ? fixPhaseTransitionSpec(input)
       : reviewPhaseTransitionSpec(input);
+  }
+  if (input.triggerOn === 'pr-merged') {
+    // Post-merge terminal stages own no labels and dispatch nothing —
+    // the merged PR is closed, the pipeline is over. The agent's job is
+    // a self-contained side-effect (e.g. opening a doc-update PR).
+    return [
+      '- Post-merge terminal stage: NO label transitions on success.',
+      '- Do NOT add or remove any harnext:* labels on the merged PR.',
+      '- Do NOT dispatch any other workflow.',
+      `- On agent failure, post a single PR comment on the merged PR noting the failure ("${input.stage.label} failed: <one-line>").`,
+      '  Do NOT add `' + input.needsJudgmentLabel + '` — there is no labeled-cascade owner for this stage.',
+    ].join('\n');
   }
   const mode = input.stage.mode;
   const lines: string[] = [];
@@ -286,6 +303,11 @@ function triggerSpec(input: StageWorkflowInput): string {
       return 'on.pull_request.types: [labeled]';
     case 'both':
       return 'on.issues.types: [labeled] AND on.pull_request.types: [labeled]';
+    case 'pr-merged':
+      // Post-merge terminal stage. Fires when a PR closes; the job guard
+      // narrows further to `merged == true` so PRs that close without
+      // merging do not trigger the agent.
+      return 'on.pull_request.types: [closed]';
   }
 }
 
@@ -408,18 +430,28 @@ function secretsSpec(agent: CodingAgentId): string {
 
 function commonRequirements(input: StageWorkflowInput): string {
   const isReviewLoop = input.stage.kind === 'review-loop';
+  const isPrMerged = input.triggerOn === 'pr-merged';
   const phaseSuffix = isReviewLoop ? `-${input.phase ?? 'review'}` : '';
   const concurrencyGroup = `harnext-${input.stage.id}${phaseSuffix}-\${{ github.event.issue.number || github.event.pull_request.number || inputs.issue_number }}`;
-  const guardLine = isReviewLoop && input.phase === 'fix'
-    ? `2. Guard the job with: if: github.event_name == 'workflow_dispatch' (the fix workflow never fires from a labeled event).`
-    : `2. Guard the job with: if: github.event_name == 'workflow_dispatch' || github.event.label.name == '${input.stage.label}'`;
+  let guardLine: string;
+  if (isReviewLoop && input.phase === 'fix') {
+    guardLine = `2. Guard the job with: if: github.event_name == 'workflow_dispatch' (the fix workflow never fires from a labeled event).`;
+  } else if (isPrMerged) {
+    // Post-merge stages MUST narrow `pull_request.closed` to merged-only,
+    // otherwise the agent runs on every closed-without-merging PR too.
+    guardLine = `2. Guard the job with: if: github.event.pull_request.merged == true (skip closed-without-merge PRs entirely).`;
+  } else {
+    guardLine = `2. Guard the job with: if: github.event_name == 'workflow_dispatch' || github.event.label.name == '${input.stage.label}'`;
+  }
+  const triggerLine = isPrMerged
+    ? `1. Trigger on ${triggerSpec(input)}. Do NOT add a workflow_dispatch trigger — post-merge stages are not part of any chain.`
+    : `1. Trigger on ${triggerSpec(input)}. Always include a workflow_dispatch trigger with a string\n   \`issue_number\` input alongside any labeled trigger so chained dispatches work.`;
   const lines: string[] = [
     `Write ONE file at exactly: ${input.workflowPath}`,
     'Do not modify any other file. Do not commit or push. Do not create branches.',
     '',
     'The workflow YAML must:',
-    `1. Trigger on ${triggerSpec(input)}. Always include a workflow_dispatch trigger with a string`,
-    '   `issue_number` input alongside any labeled trigger so chained dispatches work.',
+    triggerLine,
     guardLine,
     `3. Set concurrency.group to: ${concurrencyGroup}`,
     '   and concurrency.cancel-in-progress: false.',
@@ -432,10 +464,15 @@ function commonRequirements(input: StageWorkflowInput): string {
       .split('\n')
       .map((line) => '   ' + line)
       .join('\n'),
-    '7. Perform the label transition below via `gh` API calls:',
+    isPrMerged
+      ? '7. Post-merge stage — there are no label transitions to perform:'
+      : '7. Perform the label transition below via `gh` API calls:',
     transitionSpec(input),
   ];
-  if (!isReviewLoop) {
+  // PR-handoff only applies to issue-triggered stages that may open a PR
+  // mid-flight. Review-loop and pr-merged stages already operate on a
+  // PR — including the handoff guidance just confuses the model.
+  if (!isReviewLoop && !isPrMerged) {
     lines.push('');
     lines.push(prHandoffSpec());
   }

@@ -49,8 +49,8 @@ export interface GenerateStageWorkflowInput {
    * for the full rationale.
    */
   nextWorkflowFilename?: string;
-  /** GHA trigger — `issues`, `pull_request`, or `both` (safe default). */
-  triggerOn: 'issues' | 'pull_request' | 'both';
+  /** GHA trigger spec. See `StageWorkflowInput.triggerOn`. */
+  triggerOn: 'issues' | 'pull_request' | 'both' | 'pr-merged';
   /**
    * For review-loop stages, indicates which workflow file is being
    * generated. The wizard generates two workflows per review-loop stage

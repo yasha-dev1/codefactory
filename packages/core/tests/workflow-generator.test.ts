@@ -511,4 +511,30 @@ describe('WORKFLOW_PROMPT_BUNDLES', () => {
       }),
     ).toThrow(/phase/);
   });
+
+  it('pr-merged trigger emits pull_request: [closed] + merged-only guard, skips PR handoff', () => {
+    // Doc-gardening fires on `pull_request.closed` with merged==true. The
+    // generator must (a) emit the closed trigger, (b) narrow with the merged
+    // guard, (c) drop the PR-handoff guidance (we ARE the post-merge run, no
+    // issue→PR handoff possible), (d) describe the stage as terminal with no
+    // label transitions.
+    const bundle = WORKFLOW_PROMPT_BUNDLES['claude-code'];
+    const docGardening = DEFAULT_STAGES.find(
+      (s) => s.kind === 'normal' && s.id === 'doc-gardening',
+    ) as NormalStage;
+    expect(docGardening).toBeDefined();
+    const prompt = bundle.buildGeneratorPrompt({
+      ...baseInput,
+      triggerOn: 'pr-merged',
+      stage: toStageWorkflowStage(docGardening),
+    });
+    expect(prompt).toMatch(/on\.pull_request\.types: \[closed\]/);
+    expect(prompt).toMatch(/github\.event\.pull_request\.merged == true/);
+    expect(prompt).toMatch(/Post-merge terminal stage: NO label transitions/);
+    // PR handoff guidance is for issue-triggered stages that may open a PR
+    // mid-flight; doc-gardening is post-merge so it should NOT appear.
+    expect(prompt).not.toMatch(/If the stage runs on an issue and the agent opens a pull request/);
+    // No workflow_dispatch trigger — post-merge stages are not chained.
+    expect(prompt).toMatch(/Do NOT add a workflow_dispatch trigger/);
+  });
 });

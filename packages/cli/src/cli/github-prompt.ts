@@ -20,6 +20,7 @@ import {
   getGithubConfigPath,
   getRepoFromCwd,
   getStageRunner,
+  getStageTrigger,
   getTechStackPath,
   installRunner,
   installRunnerService,
@@ -679,16 +680,21 @@ async function runRunnersStep(
 
   for (let i = 0; i < stages.length; i += 1) {
     const stage = stages[i];
-    const nextStage = stages[i + 1];
-    const nextLabel = nextStage?.label;
+    // The labeled cascade only chains to the next labeled stage. Stages
+    // with non-labeled triggers (e.g. doc-gardening on pr-merged) live
+    // outside the cascade — they fire on their own event and never
+    // receive a label-add from the previous stage. Skip past them when
+    // computing the "next" stage for transition specs.
+    const nextLabeledStage = stages.slice(i + 1).find((s) => getStageTrigger(s) === 'labeled');
+    const nextLabel = nextLabeledStage?.label;
     // Terminal mode for this stage: normal stages use `mode`, review-loop
     // stages use `onExit`. We only bake a dispatch hint into the generated
     // workflow for yolo transitions — human-approval hands off to a
     // human so no automatic next-stage firing is wanted.
     const exitMode = stage.kind === 'review-loop' ? stage.onExit : stage.mode;
     const nextWorkflowFilename =
-      exitMode === 'yolo' && nextStage
-        ? basename(defaultWorkflowPath(nextStage.id))
+      exitMode === 'yolo' && nextLabeledStage
+        ? basename(defaultWorkflowPath(nextLabeledStage.id))
         : undefined;
     console.log();
     console.log(
@@ -900,7 +906,9 @@ async function generateAndPreviewWorkflow(args: {
       awaitingLabel: AWAITING_APPROVAL_LABEL,
       needsJudgmentLabel: NEEDS_JUDGMENT_LABEL,
       nextWorkflowFilename,
-      triggerOn: 'both',
+      // post-merge stages (e.g. doc-gardening) emit a `pull_request: [closed]`
+      // trigger; everything else uses the default labeled cascade.
+      triggerOn: getStageTrigger(stage) === 'pr-merged' ? 'pr-merged' : 'both',
       phase: args.phase,
       companionWorkflowFilename: args.companionWorkflowFilename,
     });

@@ -71,6 +71,19 @@ export interface StageRunner {
  * configs written before the union existed (no `kind` field) round-trip as
  * normal stages without any migration step.
  */
+/**
+ * Trigger event for a `NormalStage`'s workflow.
+ *  - `labeled` (default): the workflow fires on `issues.labeled` /
+ *    `pull_request.labeled` matching the stage's label, plus
+ *    `workflow_dispatch` for chained re-entry. This is how the standard
+ *    triage → plan → implement → review → verify cascade works.
+ *  - `pr-merged`: the workflow fires on `pull_request.closed` filtered by
+ *    `merged == true`. Used for post-merge stages like doc-gardening
+ *    that have no place in the labeled cascade — they are terminal and
+ *    don't transition labels or dispatch a next stage.
+ */
+export type StageTrigger = 'labeled' | 'pr-merged';
+
 export interface NormalStage {
   kind?: 'normal';
   /** Stable identifier, e.g. 'triage'. Used in logs and reorder UI. */
@@ -88,6 +101,18 @@ export interface NormalStage {
    * `migrateLegacyStageRunner`.
    */
   runner?: StageRunner;
+  /**
+   * What event fires this stage's workflow. Absent = `'labeled'` (back-
+   * compat for every config written before this field existed). Use
+   * `getStageTrigger` to read this safely.
+   */
+  trigger?: StageTrigger;
+}
+
+/** Resolve a stage's trigger, defaulting to `'labeled'` for back-compat. */
+export function getStageTrigger(stage: NormalStage | ReviewLoopStage): StageTrigger {
+  if (stage.kind === 'review-loop') return 'labeled';
+  return stage.trigger ?? 'labeled';
 }
 
 /**
@@ -293,6 +318,11 @@ export const DEFAULT_STAGES: StageEntry[] = [
     prompt: [
       'Stage: plan.',
       '',
+      'Before planning, skim `/docs/` (if present) for project conventions,',
+      'package layout, and any subsystem docs that touch the affected area.',
+      'Cross-reference what you find in the plan so the implementer reuses',
+      'documented patterns instead of inventing new ones.',
+      '',
       'Produce an implementation plan for this issue as a single issue',
       'comment with these sections:',
       '',
@@ -301,6 +331,8 @@ export const DEFAULT_STAGES: StageEntry[] = [
       '  Approach — short numbered steps.',
       '  Risks — anything that could break or surprise a reviewer.',
       '  Test plan — how correctness will be verified.',
+      '  Docs — cite any `/docs/*.md` pages relevant to this change so the',
+      '    implementer knows what to read first.',
       '',
       'Do NOT write code. Do NOT open a branch. A human will review this',
       'plan and advance the workflow if they approve.',
@@ -313,6 +345,11 @@ export const DEFAULT_STAGES: StageEntry[] = [
     mode: 'yolo',
     prompt: [
       'Stage: implement.',
+      '',
+      'Before editing, skim `/docs/` (if present) for the project conventions',
+      'and subsystem docs relevant to the affected files. Reuse documented',
+      'patterns instead of inventing new ones; if the plan referenced a',
+      '/docs page, read it first.',
       '',
       'Implement the most recent plan comment on this issue. Create a branch',
       'named issue/<number>-<short-slug>, make the code changes, commit with',
@@ -370,6 +407,55 @@ export const DEFAULT_STAGES: StageEntry[] = [
       'commit the fix to the same branch and push.',
     ].join('\n'),
   },
+  {
+    kind: 'normal',
+    id: 'doc-gardening',
+    label: 'harnext:doc-gardening',
+    mode: 'yolo',
+    trigger: 'pr-merged',
+    prompt: [
+      'Stage: doc-gardening (post-merge).',
+      '',
+      'A pull request just merged into the default branch. Your job is to keep',
+      '`/docs/` aligned with the codebase. Post-merge stages run terminally —',
+      'do not transition labels, do not dispatch anything, do not modify the',
+      'merged PR.',
+      '',
+      'Self-loop guard: if the merged PR\'s head branch starts with',
+      '`docs/post-merge-` (i.e. it was opened by a previous run of this',
+      'stage), skip immediately. Post no comment, do nothing.',
+      '',
+      '1. Fetch context for the merged PR:',
+      '     gh pr view $PR_NUMBER --json mergeCommit,baseRefName,headRefName,title',
+      '     gh pr diff $PR_NUMBER',
+      '',
+      '2. Decide whether the change is significant enough to merit doc updates.',
+      '   Significant: new public API, new module, new env var, new CLI flag,',
+      '   behavior change visible to users/integrators, breaking change, new',
+      '   dependency surface, architecture shift.',
+      '   Trivial: typo, internal refactor with no public-surface change,',
+      '   test-only change, formatting, dependency bump with no API impact.',
+      '',
+      '3. If trivial: post a single comment on the merged PR — "doc-gardening',
+      '   skipped — change is internal/trivial." — and exit. No branch, no PR.',
+      '',
+      '4. If significant: read `/docs/` to learn how docs are structured. For',
+      '   monorepos, organize per-module:',
+      '     - `/docs/README.md` is the entry point and links out.',
+      '     - `/docs/<module>/<topic>.md` for module-specific docs.',
+      '     - Cross-link liberally; avoid duplication.',
+      '   If `/docs/` does not exist yet and the change warrants it, bootstrap',
+      '   it with a `README.md` indexing per-module pages you create.',
+      '',
+      '5. Make doc edits on a fresh branch named `docs/post-merge-<pr-number>`',
+      '   off the default branch. Edit only files under `/docs/`. Open a NEW',
+      '   draft PR titled `docs: update for #<pr-number>` describing what was',
+      '   added/changed and which merged PR drove it.',
+      '',
+      'Do NOT touch code outside `/docs/`. Do NOT reopen or comment on the',
+      'merged PR beyond the optional skip-comment in step 3.',
+    ].join('\n'),
+  },
 ];
 
 export function getGithubConfigPath(cwd: string): string {
@@ -381,7 +467,8 @@ function isValidNormalStageShape(x: Record<string, unknown>): boolean {
     typeof x.id === 'string' &&
     typeof x.label === 'string' &&
     typeof x.prompt === 'string' &&
-    (x.mode === 'yolo' || x.mode === 'human-approval')
+    (x.mode === 'yolo' || x.mode === 'human-approval') &&
+    (x.trigger === undefined || x.trigger === 'labeled' || x.trigger === 'pr-merged')
   );
 }
 
